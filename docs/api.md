@@ -122,6 +122,7 @@ invalidation stay Kairo's and Mokko's.
 | `pump(svc) -> IO(Service & List<&2, M.Request>)` | Reads what arrived without waiting, answers every call against the published tree, and returns the requests in arrival order. While calls keep arriving it answers again, waiting at most 3 ms per round for up to 256 rounds. Call once per frame. |
 | `publish(svc, tree) -> IO(Service)` | Diffs against the published tree, sends the signals, and publishes `tree`. Call after every change you draw. |
 | `status(svc) -> Service & String` | `live as :1.36, app id 3` or `offline: <reason>`. |
+| `moved(svc, x, y) -> Service` | Records the window's top-left corner on the screen (from the platform, e.g. Ankra's `Moved` event); `Component` answers in screen coordinates (coord type 0) add it. Until then the origin is (0, 0). |
 | `stop(svc) -> IO(Unit)` | Closes the connection. |
 
 With `log = True` the service prints each call it answers and each change it

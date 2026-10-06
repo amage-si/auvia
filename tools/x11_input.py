@@ -7,6 +7,11 @@ propagation; nothing is injected globally.
   tools/x11_input.py "Auvia - contador" key Tab
   tools/x11_input.py "Auvia - contador" key space
   tools/x11_input.py "Auvia - contador" click 400 280
+  tools/x11_input.py "Auvia - contador" focus in      (or: focus out)
+
+`focus` sends a FocusIn/FocusOut event (mode Normal, detail Nonlinear), as
+the server does when the window manager moves keyboard focus; the real
+keyboard focus of the desktop does not change.
 """
 
 import ctypes
@@ -41,8 +46,14 @@ class KeyEvent(ctypes.Structure):
                 ("code", ctypes.c_uint), ("same_screen", ctypes.c_int)]
 
 
+class FocusEvent(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int),
+                ("display", ctypes.c_void_p), ("window", ctypes.c_ulong), ("mode", ctypes.c_int),
+                ("detail", ctypes.c_int)]
+
+
 class Event(ctypes.Union):
-    _fields_ = [("xkey", KeyEvent), ("pad", ctypes.c_long * 24)]
+    _fields_ = [("xkey", KeyEvent), ("xfocus", FocusEvent), ("pad", ctypes.c_long * 24)]
 
 
 def windows(dpy, w):
@@ -98,6 +109,16 @@ def main():
         send(dpy, w, 2, code, mask=1)       # KeyPress, KeyPressMask
         time.sleep(0.08)
         send(dpy, w, 3, code, mask=2)       # KeyRelease, KeyReleaseMask
+    elif sys.argv[2] == "focus":
+        ev = Event()
+        ev.xfocus.type = 9 if sys.argv[3] == "in" else 10   # FocusIn / FocusOut
+        ev.xfocus.send_event = 1
+        ev.xfocus.display = dpy
+        ev.xfocus.window = w
+        ev.xfocus.mode = 0                                    # NotifyNormal
+        ev.xfocus.detail = 3                                  # NotifyNonlinear
+        x.XSendEvent(dpy, w, 0, 1 << 21, ctypes.byref(ev))    # FocusChangeMask
+        x.XFlush(dpy)
     elif sys.argv[2] == "click":
         px, py = int(sys.argv[3]), int(sys.argv[4])
         send(dpy, w, 6, 0, px, py, mask=64)  # MotionNotify, PointerMotionMask

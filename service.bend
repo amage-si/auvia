@@ -180,6 +180,12 @@ def status(svc: Service) -> Service & String:
   Service{link, +ctx, tree, stats, log} = svc
   status.of(B.reason_of(link), ctx, tree, stats, log)
 
+# Records where the window is on the screen, so Component answers in
+# screen coordinates use the real origin instead of (0, 0).
+def moved(svc: Service, +x: F32, +y: F32) -> Service:
+  Service{link, ctx, tree, stats, log} = svc
+  Service{link, O.at(ctx, x, y), tree, stats, log}
+
 def stats(svc: Service) -> Service & Stats:
   Service{link, ctx, tree, +st, log} = svc
   (Service{link, ctx, tree, st, log}, st)

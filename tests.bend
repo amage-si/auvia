@@ -520,6 +520,8 @@ def checks.serving() -> List<&2, Check>:
     Check{U32.is_eq(U32.and(state_lo(reply_arg(serve1(call(node_path(2), acc(), "GetState", W.DEnd{}), fixture(2, "x")))), 6400), 6400), "atspi: state words carry enabled, focusable and focused"},
     Check{same(ref_path(reply_arg(ask(call(node_path(2), acc(), "GetApplication", W.DEnd{})))), "/org/a11y/atspi/accessible/root"), "atspi: GetApplication points at the root"},
     Check{same(ints(reply_arg(ask(call(node_path(2), "org.a11y.atspi.Component", "GetExtents", W.seq([W.DU32{1}]))))), "20,60,160,44,"), "atspi: window extents"},
+    Check{same(ints(reply_arg(S.serve([call(node_path(2), "org.a11y.atspi.Component", "GetExtents", W.seq([W.DU32{0}]))],
+      O.at(ctx(), 100.0, 50.0), fixture(0, "Cliques: 0")))), "120,110,160,44,"), "atspi: screen extents follow the window origin"},
     Check{same(ref_path(reply_arg(ask(call(node_path(1), "org.a11y.atspi.Component", "GetAccessibleAtPoint", W.seq([W.DI32{30}, W.DI32{70}, W.DU32{1}]))))), "/org/a11y/atspi/accessible/2"), "atspi: hit test finds the button"},
     Check{same(ref_path(reply_arg(ask(call(node_path(1), "org.a11y.atspi.Component", "GetAccessibleAtPoint", W.seq([W.DI32{390}, W.DI32{190}, W.DU32{1}]))))), "/org/a11y/atspi/null"), "atspi: hit test outside every child is null"},
     Check{is_bool(reply_arg(ask(call(node_path(2), "org.a11y.atspi.Component", "Contains", W.seq([W.DI32{179}, W.DI32{103}, W.DU32{1}])))), True{}) && is_bool(reply_arg(ask(call(node_path(2), "org.a11y.atspi.Component", "Contains", W.seq([W.DI32{180}, W.DI32{103}, W.DU32{1}])))), False{}), "atspi: Contains uses the exclusive right edge"},

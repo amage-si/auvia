@@ -13,7 +13,10 @@ policy. The native bridge is three small effects (about 100 lines of C).
 (Hyprland/XWayland, at-spi2-core 2.60, dbus-broker 37). The demo window is
 listed in the AT-SPI desktop, readable and operable by a real AT-SPI client.
 Orca 50.2 reads it: the window title, the button with its role and
-description, and every counter update.
+description, and every counter update. The demo runs in
+[Ankra](https://github.com/amage-si/ankra)'s native window, which reports
+window focus and position, and presents through
+[Voltra](https://github.com/amage-si/voltra).
 
 ![The accessible counter after AT-SPI focus and two activations.](docs/preview.png)
 
@@ -46,9 +49,10 @@ description, and every counter update.
 | Level | Evidence |
 | --- | --- |
 | Compiled | Every module, the tests and three examples build natively with `bend -o`. The checker reports only the expected "relies on foreign code" notice for the native effects. |
-| Native checks | `tests.bend`: **73 checks pass** (wire format against GLib-encoded golden bytes, model validation, diff order, AT-SPI answers, Kairo routing, one end-to-end pure flow). |
-| Real AT-SPI client | `tools/demo_check.sh` runs the window and checks it with libatspi (python `gi`): **18 checks pass**, including Tab, Space and click sent to the window, AT-SPI `GrabFocus` and `DoAction`. `gdbus` (GLib) reads the same objects independently. |
-| Screen reader | `tools/orca_check.sh` runs Orca 50.2 with throwaway settings and a silent private speech-dispatcher, and keeps its debug log. Orca said: `'Auvia - contador'` (window title, on start), `'Clique aqui'` `'button.'` `'Soma um ao contador.'` (Tab), `'Cliques: 1'` (Space), `'Cliques: 2'` (Enter). |
+| Native checks | `tests.bend`: **74 checks pass** (wire format against GLib-encoded golden bytes, model validation, diff order, AT-SPI answers, screen extents from the window origin, Kairo routing, one end-to-end pure flow). |
+| Real AT-SPI client | `tools/atspi_probe.py` (libatspi through python `gi`) against the counter on Ankra's native window: **18 checks pass**, including Tab, Space and click sent to the window, AT-SPI `GrabFocus` and `DoAction`. `tools/demo_check.sh` wraps the probe, captures only the window and adds an independent `gdbus` read. |
+| Window focus and position | With synthetic FocusIn/FocusOut sent to the window, the frame gains and loses `active` and `window:activate`/`deactivate` are emitted; after the window manager moved the window to (300, 200), the frame's screen extents were `[300, 200, 480, 320]` and the button's `[479, 284, 122, 44]`. |
+| Screen reader | `tools/orca_check.sh` runs Orca 50.2 with throwaway settings and a silent private speech-dispatcher, and keeps its debug log. Orca said: `'Auvia - contador'` (window title, on start), `'Clique aqui'` `'button.'` `'Soma um ao contador.'` (Tab), `'Cliques: 1'` (Space), `'Cliques: 2'` (Enter). This run predates the move to Ankra's native window and was not repeated. |
 
 The live check (window `Auvia - contador`, XWayland, 480×320) sees this tree:
 
@@ -63,7 +67,10 @@ application "auvia-counter"                       Accessible, Application
 and this event sequence, each announced once: Tab → `focused=1` + `focus:` on
 the button; Space → `armed=1`, `armed=0`, name `Cliques: 1`; click outside →
 `focused=0`; AT-SPI `GrabFocus` → `focused=1` + `focus:`; AT-SPI `DoAction(0)` →
-name `Cliques: 2`. The window closes normally (exit 0).
+name `Cliques: 2`. The window closes normally: the accessibility connection
+is closed explicitly, then Voltra and the window (exit 0, 0 native objects
+left). While idle the counter presents nothing and wakes about 20 times per
+second to answer the bus (see Current boundaries).
 
 Under Orca, one gap remains: after a click on empty space Kairo clears focus,
 but Orca keeps the button as its point of focus, so the next Tab back to the
@@ -75,7 +82,9 @@ toolkit that kept focus on the button (or moved it elsewhere) would avoid it.
 Requirements: the [Bend 2 toolchain](https://bend-lang.com), Clang 14 or newer,
 X11 headers for the demo, an AT-SPI bus (`at-spi2-core`), and the sibling
 AMAGE libraries checked out next to `Auvia` (Mokko, Kairo, Tessra, Chromi,
-Ankra, Runika, Syllo, Dithra) for the adapter and the demo.
+Ankra, Voltra, Runika, Syllo, Dithra) for the adapter and the demo, keeping
+their capitalized directory names. The demo also needs a Vulkan 1.3 driver
+and an X11 or XWayland display.
 
 ```sh
 export BEND_NO_TELEMETRY=1
@@ -93,7 +102,7 @@ bend examples/counter.bend -o build/counter
 
 It prints its bus name and every call and event it handles. Inspect it with any
 AT-SPI client, or run the end-to-end check, which opens the window, drives it,
-captures it and closes it:
+captures only that window and closes it:
 
 ```sh
 tools/demo_check.sh        # needs python3-gobject (Atspi typelib), grim, hyprctl
@@ -125,20 +134,18 @@ technology keeps its place across updates.
 
 ## Current boundaries
 
-- **Window focus.** Base's X11 window selects FocusIn/FocusOut but does not
-  deliver them, so Kairo's `window_focus` stays true and the frame always
-  reports `active`. Needed in Ankra/the runtime: a focus event (for example
-  `Focus{in: Bool}` in `Event`), which Kairo's `WindowFocus` input already models.
-- **Screen coordinates.** The runtime does not report the window position, and
-  Wayland does not expose one. `Component` answers window and parent
-  coordinates exactly; screen coordinates use an origin of (0, 0) (`Ctx.origin_x/y`
-  is ready for a real one). Needed: a position or configure event from the window.
-- **Native window id.** Not needed by AT-SPI itself, but tools that match
-  accessible frames to windows would use one; Base does not expose it.
-- **Clean shutdown.** `Ankra.run` does not hand the final state back, so the
-  accessibility socket closes at process exit rather than explicitly. The
-  registry drops the app when its bus name goes away. Needed in Ankra: return
-  the final state from `run` (or an on-close hook).
+- **Waiting on two sources.** Ankra's wait watches the X connection only, so
+  the counter wakes at least every 50 ms to answer the accessibility bus
+  (about 20 wakeups per second while idle, no frames presented). A wait that
+  watches both sockets would remove them.
+- **Window focus** follows the real window (Ankra's `Focused` events through
+  Kairo's `WindowFocus`). Kairo ignores keys and presses while the window is
+  inactive, as a desktop does; the probe's keyboard checks therefore run
+  after a focus-in.
+- **Screen coordinates** use the position Ankra reports (`S.moved`). Under a
+  Wayland compositor, that is the XWayland position the compositor gives the
+  window.
+- **Native window id.** Ankra exposes it; Auvia does not use it yet.
 - **Kairo inputs.** Kairo has no `Activate{id}` or `Focus{id}` input, so
   `route` builds the change itself with Kairo's own `dirty.finish` and the public
   `State` fields. Native inputs in Kairo would make that path Kairo's own.
@@ -147,8 +154,8 @@ technology keeps its place across updates.
   `object:text-changed`; relation-change events; device (key) event
   listeners.
 - **Performance.** Messages and trees are lists; fine for small interfaces, not
-  measured for large ones. Each frame pumps the bus without waiting; a tree is
-  rebuilt and diffed only when Kairo marks the frame dirty or a request arrives.
+  measured for large ones. A tree is rebuilt and diffed only when Kairo marks
+  the frame dirty, the window gains or loses focus, or a request arrives.
 
 ## Repository map
 
@@ -170,11 +177,10 @@ technology keeps its place across updates.
 
 ## Direction
 
-Text and live regions for labels, then real window focus and position from the
-platform layer, then longer Orca sessions (flat review, where-am-I, more
-widgets). More
-widgets and interfaces follow the components Mokko adds. Other platforms come
-after the Linux experience is complete.
+Text and live regions for labels, one wait for the window and the bus, then
+longer Orca sessions (flat review, where-am-I, more widgets). More widgets and
+interfaces follow the components Mokko adds. Other platforms come after the
+Linux experience is complete.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development rules. The API is
 experimental. Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.

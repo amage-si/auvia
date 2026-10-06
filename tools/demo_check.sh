@@ -37,20 +37,28 @@ for _ in $(seq 1 100); do
 done
 sleep 1.5
 
-geometry() {
+# The window's foreign-toplevel id: grim -T captures that window alone,
+# never a screen region (which could include other windows).
+toplevel() {
   hyprctl clients -j | python3 -I -c '
 import json, sys
 for c in json.load(sys.stdin):
     if c["title"] == sys.argv[1] and c["pid"] == int(sys.argv[2]):
-        print("%d,%d %dx%d" % (c["at"][0], c["at"][1], c["size"][0], c["size"][1]))
+        print(c["stableId"])
         break' "$title" "$pid"
 }
 hyprctl clients -j | python3 -I -c '
 import json, sys
 print(json.dumps([c for c in json.load(sys.stdin) if c["pid"] == int(sys.argv[1])], indent=2))' "$pid" > "$out/window.json"
-geo="$(geometry)"
-echo "geometry: $geo"
-[ -n "$geo" ] && grim -g "$geo" "$out/01-before.png"
+top="$(toplevel)"
+echo "toplevel: $top"
+[ -n "$top" ] && grim -T "$top" "$out/01-before.png"
+
+# Keyboard input reaches a focused window; Kairo ignores keys and presses
+# while the window is inactive. Send the focus change the window manager
+# would (synthetic, to this window only) before driving it.
+python3 -I "$root/tools/x11_input.py" "$title" focus in
+sleep 0.3
 
 python3 -I -W ignore::DeprecationWarning "$root/tools/atspi_probe.py" --app auvia-counter --x11-title "$title" \
   --button "Clique aqui" --label-prefix "Cliques:" --out "$out/probe.json" | tee "$out/probe.txt"
@@ -75,8 +83,7 @@ name="$(grep -o 'live as [^,]*' "$out/counter.log" | head -1 | cut -d' ' -f3)"
   gdbus introspect --address "$addr" --dest "$name" --object-path /org/a11y/atspi/accessible/2
 } > "$out/gdbus.txt" 2>&1
 sleep 0.5
-geo="$(geometry)"
-[ -n "$geo" ] && grim -g "$geo" "$out/02-after-atspi.png"
+[ -n "$top" ] && grim -T "$top" "$out/02-after-atspi.png"
 echo "probe=$probe" > "$out/probe-status.txt"
 echo "evidence: $out"
 exit "$probe"

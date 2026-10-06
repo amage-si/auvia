@@ -230,6 +230,12 @@ def parent_box.of(m: Maybe<&2, M.Node>) -> M.Box:
 def parent_box(+ns: List<&2, M.Node>, n: M.Node) -> M.Box:
   parent_box.of(M.find(ns, M.node_parent(n)))
 
+# The context with the window's top-left corner at (x, y) on the screen,
+# as the platform reports it (Ankra's Moved events).
+def at(ctx: Ctx, +x: F32, +y: F32) -> Ctx:
+  Ctx{bus, app, l, ox, oy} = ctx
+  Ctx{bus, app, l, x, y}
+
 # The offset from window coordinates to coord_type's: 0 screen (the window
 # origin, when known), 1 window (none), 2 parent (minus the parent's corner).
 type Offset is Data:
