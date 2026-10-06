@@ -177,4 +177,16 @@ widgets and interfaces follow the components Mokko adds. Other platforms come
 after the Linux experience is complete.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development rules. The API is
-experimental. A distribution license has not yet been selected.
+experimental. Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. Unless you explicitly state otherwise, any contribution
+intentionally submitted for inclusion in this work, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any additional
+terms or conditions.
