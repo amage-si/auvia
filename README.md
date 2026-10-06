@@ -12,8 +12,8 @@ policy. The native bridge is three small effects (about 100 lines of C).
 **Status:** first Linux implementation, tested with **Bend 2.0.35** on Arch
 (Hyprland/XWayland, at-spi2-core 2.60, dbus-broker 37). The demo window is
 listed in the AT-SPI desktop, readable and operable by a real AT-SPI client.
-It has not yet been tried with a screen reader (Orca is not installed on the
-development machine).
+Orca 50.2 reads it: the window title, the button with its role and
+description, and every counter update.
 
 ![The accessible counter after AT-SPI focus and two activations.](docs/preview.png)
 
@@ -29,7 +29,11 @@ development machine).
 - AT-SPI interfaces: `Accessible`, `Application`, `Component`, `Action`,
   `Value`, `Cache`, plus `Properties`, `Introspectable` and `Peer`.
   Registration with the registry (`Socket.Embed`), `Event.Object` and
-  `Event.Focus` signals, cache add/remove signals.
+  `Event.Focus` signals, `window:activate`/`deactivate` for the frame (sent at
+  start too, so screen readers learn the window), `object:announcement` for
+  name changes of live regions (`live` attribute), cache add/remove signals.
+  Calls are answered in several short rounds per frame while a client keeps
+  asking, so Orca's few hundred startup calls take milliseconds, not seconds.
 - Action routing: an AT-SPI `DoAction` on an enabled button becomes exactly one
   Kairo `Activated` (the same action a click produces); `GrabFocus` moves Kairo's
   focus as Tab would. Anything else is refused and changes nothing.
@@ -42,9 +46,9 @@ development machine).
 | Level | Evidence |
 | --- | --- |
 | Compiled | Every module, the tests and three examples build natively with `bend -o`. The checker reports only the expected "relies on foreign code" notice for the native effects. |
-| Native checks | `tests.bend`: **69 checks pass** (wire format against GLib-encoded golden bytes, model validation, diff order, AT-SPI answers, Kairo routing, one end-to-end pure flow). |
+| Native checks | `tests.bend`: **73 checks pass** (wire format against GLib-encoded golden bytes, model validation, diff order, AT-SPI answers, Kairo routing, one end-to-end pure flow). |
 | Real AT-SPI client | `tools/demo_check.sh` runs the window and checks it with libatspi (python `gi`): **18 checks pass**, including Tab, Space and click sent to the window, AT-SPI `GrabFocus` and `DoAction`. `gdbus` (GLib) reads the same objects independently. |
-| Screen reader | **Not done.** Orca is not installed here. |
+| Screen reader | `tools/orca_check.sh` runs Orca 50.2 with throwaway settings and a silent private speech-dispatcher, and keeps its debug log. Orca said: `'Auvia - contador'` (window title, on start), `'Clique aqui'` `'button.'` `'Soma um ao contador.'` (Tab), `'Cliques: 1'` (Space), `'Cliques: 2'` (Enter). |
 
 The live check (window `Auvia - contador`, XWayland, 480×320) sees this tree:
 
@@ -60,6 +64,11 @@ and this event sequence, each announced once: Tab → `focused=1` + `focus:` on
 the button; Space → `armed=1`, `armed=0`, name `Cliques: 1`; click outside →
 `focused=0`; AT-SPI `GrabFocus` → `focused=1` + `focus:`; AT-SPI `DoAction(0)` →
 name `Cliques: 2`. The window closes normally (exit 0).
+
+Under Orca, one gap remains: after a click on empty space Kairo clears focus,
+but Orca keeps the button as its point of focus, so the next Tab back to the
+same button is silent. That is Orca not re-announcing an unchanged focus; a
+toolkit that kept focus on the button (or moved it elsewhere) would avoid it.
 
 ## Quick start
 
@@ -135,8 +144,8 @@ technology keeps its place across updates.
   `State` fields. Native inputs in Kairo would make that path Kairo's own.
 - **Not implemented:** the `Text`, `EditableText`, `Selection`, `Table`,
   `Hyperlink` and `Collection` interfaces; setting `Value.CurrentValue`;
-  `object:text-changed` and live-region announcements beyond the `live`
-  attribute; relation-change events; device (key) event listeners.
+  `object:text-changed`; relation-change events; device (key) event
+  listeners.
 - **Performance.** Messages and trees are lists; fine for small interfaces, not
   measured for large ones. Each frame pumps the bus without waiting; a tree is
   rebuilt and diffed only when Kairo marks the frame dirty or a request arrives.
@@ -156,13 +165,14 @@ technology keeps its place across updates.
 | [native/](native/) | The native bridge: `Unix.connect`, `Unix.poll_bytes`, `Unix.uid` (C and JS). |
 | [tests.bend](tests.bend) | Native checks. |
 | [examples/](examples/) | The accessible counter, a headless host, a bus probe. |
-| [tools/](tools/) | Validation only: libatspi probe, X11 input/close helpers, the end-to-end script. |
+| [tools/](tools/) | Validation only: libatspi probe, X11 input/close helpers, the end-to-end and Orca scripts. |
 | [docs/api.md](docs/api.md) | Types, contracts and protocol details. |
 
 ## Direction
 
 Text and live regions for labels, then real window focus and position from the
-platform layer, then a screen-reader session with Orca on this machine. More
+platform layer, then longer Orca sessions (flat review, where-am-I, more
+widgets). More
 widgets and interfaces follow the components Mokko adds. Other platforms come
 after the Linux experience is complete.
 

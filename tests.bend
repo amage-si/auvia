@@ -73,6 +73,12 @@ def key(c: D.Change) -> String:
       "add:" ++ U32.show(id)
     case D.Removed{id}:
       "del:" ++ U32.show(id)
+    case D.WindowActivated{id}:
+      "window+:" ++ U32.show(id)
+    case D.WindowDeactivated{id}:
+      "window-:" ++ U32.show(id)
+    case D.Announced{id, t, level}:
+      "announce:" ++ U32.show(id) ++ ":" ++ t ++ ":" ++ U32.show(level)
 
 def keys(cs: List<&2, D.Change>) -> String:
   match cs:
@@ -94,6 +100,10 @@ def b5() -> M.Node:
 
 def grown() -> M.Tree:
   M.Tree{[M.application("app", [1]), frame([2, 3, 4, 5]), b2(0), label("Cliques: 0"), b4(0), b5()]}
+
+def inactive() -> M.Tree:
+  M.Tree{[M.application("app", [1]), M.Node{1, 0, M.Frame{}, "Janela", "", visible(), Nil{}, Nil{}, Nil{},
+    M.Box{0.0, 0.0, 400.0, 200.0}, None{}, [2, 3, 4]}, b2(0), label("Cliques: 0"), b4(0)]}
 
 def shrunk() -> M.Tree:
   M.Tree{[M.application("app", [1]), frame([2]), b2(0)]}
@@ -492,11 +502,13 @@ def checks.diff() -> List<&2, Check>:
   [
     Check{same(diffs(fixture(2, "Cliques: 0"), fixture(2, "Cliques: 0")), ""), "diff: identical trees emit nothing"},
     Check{same(diffs(fixture(2, "Cliques: 0"), fixture(4, "Cliques: 0")), "state:2:focused:False|state:4:focused:True|focus:4"), "diff: focus leaves the old node before reaching the new one"},
-    Check{same(diffs(fixture(0, "Cliques: 0"), fixture(2, "Cliques: 1")), "name:3:Cliques: 1|state:2:focused:True|focus:2"), "diff: name change and focus gain are exact"},
+    Check{same(diffs(fixture(0, "Cliques: 0"), fixture(2, "Cliques: 1")), "name:3:Cliques: 1|announce:3:Cliques: 1:1|state:2:focused:True|focus:2"), "diff: name change, live-region announcement and focus gain are exact"},
     Check{same(diffs(fixture(0, "Cliques: 0"), grown()), "add:5|child+:1:3:5"), "diff: a new child is cached before its parent lists it"},
     Check{same(diffs(fixture(0, "Cliques: 0"), shrunk()), "child-:1:2:4|child-:1:1:3|del:3|del:4"), "diff: removed children go last index first"},
     Check{same(diffs(fixture(0, "Cliques: 0"), reordered()), "child-:1:2:4|child-:1:1:3|child-:1:0:2|child+:1:0:4|child+:1:1:2|child+:1:2:3"), "diff: reorder moves children out and back"},
-    Check{same(diffs(fixture(0, "Cliques: 0"), moved()), "bounds:2"), "diff: geometry change emits only bounds"}
+    Check{same(diffs(fixture(0, "Cliques: 0"), moved()), "bounds:2"), "diff: geometry change emits only bounds"},
+    Check{same(diffs(M.Tree{Nil{}}, fixture(0, "Cliques: 0")), "add:0|add:1|add:2|add:3|add:4|state:1:active:True|window+:1"), "diff: first publication caches every node and activates the window"},
+    Check{same(diffs(fixture(0, "Cliques: 0"), inactive()), "state:1:active:False|window-:1") && same(diffs(inactive(), fixture(0, "Cliques: 0")), "state:1:active:True|window+:1"), "diff: frame activity is a window (de)activation"}
   ]
 
 def checks.serving() -> List<&2, Check>:
@@ -528,6 +540,8 @@ def checks.serving() -> List<&2, Check>:
     Check{same(W.sig(var_inner(reply_arg(serve1(call(node_path(6), "org.freedesktop.DBus.Properties", "Get", W.seq([W.DStr{"org.a11y.atspi.Value"}, W.DStr{"CurrentValue"}])), with_slider(2.5))))), "d") && f64_is(var_inner(reply_arg(serve1(call(node_path(6), "org.freedesktop.DBus.Properties", "Get", W.seq([W.DStr{"org.a11y.atspi.Value"}, W.DStr{"MaximumValue"}])), with_slider(2.5)))), 1076101120, 0), "atspi: Value properties are doubles"},
     Check{same(diffs(with_slider(2.5), with_slider(3.0)), "value:6") && same(checked(with_slider(1.0)), "ok"), "diff: value change is one event"},
     Check{same(member_of(signal_of(D.StateChanged{2, M.Focused{}, True{}})), "org.a11y.atspi.Event.Object.StateChanged@/org/a11y/atspi/accessible/2:siiva{sv}"), "atspi: state change signal"},
+    Check{same(member_of(signal_of(D.WindowActivated{1})), "org.a11y.atspi.Event.Window.Activate@/org/a11y/atspi/accessible/1:siiva{sv}"), "atspi: window activate signal"},
+    Check{same(member_of(signal_of(D.Announced{3, "Cliques: 1", 1})), "org.a11y.atspi.Event.Object.Announcement@/org/a11y/atspi/accessible/3:siiva{sv}"), "atspi: announcement signal"},
     Check{same(member_of(signal_of(D.FocusGained{2})), "org.a11y.atspi.Event.Focus.Focus@/org/a11y/atspi/accessible/2:siiva{sv}"), "atspi: legacy focus signal"},
     Check{same(member_of(signal_of(D.Added{2})), "org.a11y.atspi.Cache.AddAccessible@/org/a11y/atspi/cache:((so)(so)(so)iiassusau)"), "atspi: cache add signal"},
     Check{same(member_of(signal_of(D.ChildRemoved{1, 0, 2})), "org.a11y.atspi.Event.Object.ChildrenChanged@/org/a11y/atspi/accessible/1:siiva{sv}"), "atspi: children changed signal"}
@@ -547,7 +561,7 @@ def checks.kairo() -> List<&2, Check>:
     Check{M.has_state(node_states(built(K.replay([KT.PointerDown{30.0, 70.0, 0}], kstate())), 2), M.Armed{}), "kairo: a held press is ARMED"},
     Check{Bool.not(M.has_state(node_states(built(kstate()), 5), M.Enabled{})) && M.has_state(node_states(built(kstate()), 5), M.Focusable{}), "kairo: disabled button is not enabled"},
     Check{same(diffs(built(kstate()), built(K.replay([tab()], kstate()))), "state:2:focused:True|focus:2"), "kairo: Tab is announced as one focus change"},
-    Check{same(e2e(), "1|name:3:Cliques: 1"), "end to end: AT-SPI DoAction -> one activation -> one name change"}
+    Check{same(e2e(), "1|name:3:Cliques: 1|announce:3:Cliques: 1:1"), "end to end: AT-SPI DoAction -> one activation -> one name change and one announcement"}
   ]
 
 def checks() -> List<&2, Check>:

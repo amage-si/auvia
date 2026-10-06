@@ -342,6 +342,12 @@ def signals(+ctx: Ctx, +ns: List<&2, M.Node>, c: D.Change) -> List<&2, W.Message
       added_item(ctx, ns, M.find(ns, id))
     case D.Removed{id}:
       [W.signal(cache_path(), i_cache(), "RemoveAccessible", W.seq([node_ref(ctx, id)]))]
+    case D.WindowActivated{id}:
+      [event(id, "org.a11y.atspi.Event.Window", "Activate", "", 0, 0, W.DStr{""})]
+    case D.WindowDeactivated{id}:
+      [event(id, "org.a11y.atspi.Event.Window", "Deactivate", "", 0, 0, W.DStr{""})]
+    case D.Announced{id, text, level}:
+      [object_event(id, "Announcement", "", level, 0, W.DStr{text})]
 
 def announce(+ctx: Ctx, +ns: List<&2, M.Node>, cs: List<&2, D.Change>) -> List<&2, W.Message>:
   match cs:

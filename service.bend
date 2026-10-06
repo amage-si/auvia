@@ -64,59 +64,6 @@ def address() -> IO(B.Res(String)):
     env : B.Res(String) <- IO.get_env("AT_SPI_BUS_ADDRESS")
     given(env)
 
-# Lifecycle
-# ---------
-
-def locale.pick(r: B.Res(String)) -> String:
-  match r:
-    case Fail{e}:
-      "C"
-    case Done{l}:
-      l
-
-def registered(got: B.Link & String, +tree: M.Tree, locale: String, log: Bool) -> IO(Service):
-  (link, +name) = got
-  +ctx = {O.Ctx{name, 0, locale, 0.0, 0.0} : O.Ctx}
-  do IO<Service>:
-    sent : B.Link <- B.send(link, Con{embed(name), Nil{}})
-    return Service{sent, ctx, tree, Stats{0, 0, 0}, log}
-
-def connected(r: B.Res(String), +tree: M.Tree, locale: String, log: Bool) -> IO(Service):
-  match r:
-    case Fail{e}:
-      IO.pure(Service, Service{B.Dead{B.reason(e)}, O.Ctx{"", 0, locale, 0.0, 0.0}, tree, Stats{0, 0, 0}, log})
-    case Done{address}:
-      do IO<Service>:
-        link : B.Link <- B.open(address)
-        registered(B.name(link), tree, locale, log)
-
-# Joins the accessibility bus and embeds the app under the desktop. The
-# registry answers Embed asynchronously; pump consumes the reply.
-def start(tree: M.Tree, log: Bool) -> IO(Service):
-  do IO<Service>:
-    lang : B.Res(String) <- IO.get_env("LANG")
-    r : B.Res(String) <- address()
-    connected(r, tree, locale.pick(lang), log)
-
-def stop(svc: Service) -> IO(Unit):
-  Service{link, ctx, tree, stats, log} = svc
-  B.close(link)
-
-def status.of(got: B.Link & String, +ctx: O.Ctx, tree: M.Tree, stats: Stats, log: Bool) -> Service & String:
-  (link, +why) = got
-  O.Ctx{+bus, +app, l, x, y} = ctx
-  (Service{link, ctx, tree, stats, log},
-    Bool.pick(String, String.is_empty(why), "live as " ++ bus ++ ", app id " ++ U32.show(app), "offline: " ++ why))
-
-# "live as :1.36, app id 3" or the reason the service is offline.
-def status(svc: Service) -> Service & String:
-  Service{link, +ctx, tree, stats, log} = svc
-  status.of(B.reason_of(link), ctx, tree, stats, log)
-
-def stats(svc: Service) -> Service & Stats:
-  Service{link, ctx, tree, +st, log} = svc
-  (Service{link, ctx, tree, st, log}, st)
-
 # Logging
 # -------
 
@@ -161,6 +108,12 @@ def change_text(c: D.Change) -> String:
       "cache add " ++ U32.show(id)
     case D.Removed{id}:
       "cache remove " ++ U32.show(id)
+    case D.WindowActivated{id}:
+      "window activate " ++ U32.show(id)
+    case D.WindowDeactivated{id}:
+      "window deactivate " ++ U32.show(id)
+    case D.Announced{id, t, level}:
+      "announcement from " ++ U32.show(id) ++ " (live " ++ U32.show(level) ++ "): " ++ t
 
 def log_changes(on: Bool, cs: List<&2, D.Change>) -> IO(Unit):
   match on cs:
@@ -172,6 +125,64 @@ def log_changes(on: Bool, cs: List<&2, D.Change>) -> IO(Unit):
       do IO<Unit>:
         IO.print("auvia: emit " ++ change_text(c))
         log_changes(True{}, rest)
+
+# Lifecycle
+# ---------
+
+def locale.pick(r: B.Res(String)) -> String:
+  match r:
+    case Fail{e}:
+      "C"
+    case Done{l}:
+      l
+
+# After Embed, the first tree is announced as if it replaced an empty one:
+# caches learn every node, and an active frame activates its window, which
+# is how screen readers learn the app's window and speak its title.
+def registered(got: B.Link & String, +tree: M.Tree, locale: String, +log: Bool) -> IO(Service):
+  (link, +name) = got
+  +ctx = {O.Ctx{name, 0, locale, 0.0, 0.0} : O.Ctx}
+  +changes = D.diff(M.Tree{Nil{}}, tree)
+  do IO<Service>:
+    sent : B.Link <- B.send(link, Con{embed(name), O.announce(ctx, M.nodes(tree), changes)})
+    log_changes(log, changes)
+    return Service{sent, ctx, tree, Stats{0, 0, 0}, log}
+
+def connected(r: B.Res(String), +tree: M.Tree, locale: String, log: Bool) -> IO(Service):
+  match r:
+    case Fail{e}:
+      IO.pure(Service, Service{B.Dead{B.reason(e)}, O.Ctx{"", 0, locale, 0.0, 0.0}, tree, Stats{0, 0, 0}, log})
+    case Done{address}:
+      do IO<Service>:
+        link : B.Link <- B.open(address)
+        registered(B.name(link), tree, locale, log)
+
+# Joins the accessibility bus and embeds the app under the desktop. The
+# registry answers Embed asynchronously; pump consumes the reply.
+def start(tree: M.Tree, log: Bool) -> IO(Service):
+  do IO<Service>:
+    lang : B.Res(String) <- IO.get_env("LANG")
+    r : B.Res(String) <- address()
+    connected(r, tree, locale.pick(lang), log)
+
+def stop(svc: Service) -> IO(Unit):
+  Service{link, ctx, tree, stats, log} = svc
+  B.close(link)
+
+def status.of(got: B.Link & String, +ctx: O.Ctx, tree: M.Tree, stats: Stats, log: Bool) -> Service & String:
+  (link, +why) = got
+  O.Ctx{+bus, +app, l, x, y} = ctx
+  (Service{link, ctx, tree, stats, log},
+    Bool.pick(String, String.is_empty(why), "live as " ++ bus ++ ", app id " ++ U32.show(app), "offline: " ++ why))
+
+# "live as :1.36, app id 3" or the reason the service is offline.
+def status(svc: Service) -> Service & String:
+  Service{link, +ctx, tree, stats, log} = svc
+  status.of(B.reason_of(link), ctx, tree, stats, log)
+
+def stats(svc: Service) -> Service & Stats:
+  Service{link, ctx, tree, +st, log} = svc
+  (Service{link, ctx, tree, st, log}, st)
 
 # Publishing
 # ----------
@@ -213,10 +224,51 @@ def received(got: B.Link & List<&2, W.Message>, +ctx: O.Ctx, +tree: M.Tree, stat
     log_calls(log, calls(msgs))
     answered(link, S.serve(msgs, ctx, tree), tree, stats, log, count(W.Message, calls(msgs)))
 
-# Reads what arrived (without waiting), answers every call against the
-# published tree, and returns the requests for the app to route.
-def pump(svc: Service) -> IO(Service & List<&2, M.Request>):
+def calls_seen(svc: Service) -> Service & U32:
+  Service{link, ctx, tree, Stats{+c, s, r}, log} = svc
+  (Service{link, ctx, tree, Stats{c, s, r}, log}, c)
+
+def pump.once(svc: Service, ms: U32) -> IO(Service & List<&2, M.Request>):
   Service{link, ctx, tree, stats, log} = svc
   do IO<Service & List<&2, M.Request>>:
-    got : B.Link & List<&2, W.Message> <- B.recv(link, 0)
+    got : B.Link & List<&2, W.Message> <- B.recv(link, ms)
     received(got, ctx, tree, stats, log)
+
+def pump.counted(seen: Service & U32, rs: List<&2, M.Request>, +before: U32,
+  k: Service -> List<&2, M.Request> -> Bool -> IO(Service & List<&2, M.Request>)) -> IO(Service & List<&2, M.Request>):
+  (svc, +after) = seen
+  k(svc, rs, U32.is_ne(before, after))
+
+def pump.step(got: Service & List<&2, M.Request>, rs: List<&2, M.Request>, +before: U32,
+  k: Service -> List<&2, M.Request> -> Bool -> IO(Service & List<&2, M.Request>)) -> IO(Service & List<&2, M.Request>):
+  (svc, now) = got
+  pump.counted(calls_seen(svc), List.append(&2, M.Request, rs, now), before, k)
+
+# One round: read (waiting at most ms), answer, and tell k whether any call
+# was answered.
+def pump.round(seen: Service & U32, rs: List<&2, M.Request>, ms: U32,
+  k: Service -> List<&2, M.Request> -> Bool -> IO(Service & List<&2, M.Request>)) -> IO(Service & List<&2, M.Request>):
+  (svc, +before) = seen
+  do IO<Service & List<&2, M.Request>>:
+    got : Service & List<&2, M.Request> <- pump.once(svc, ms)
+    pump.step(got, rs, before, k)
+
+# Clients make one call at a time and wait for each reply, so one batch per
+# frame turns a screen reader's few hundred startup calls into seconds.
+# After a round that answered calls, wait up to 3 ms for the next one, for
+# at most fuel rounds; an idle frame costs one non-blocking read.
+def pump.go(fuel: Nat, svc: Service, rs: List<&2, M.Request>, busy: Bool) -> IO(Service & List<&2, M.Request>):
+  match fuel busy:
+    case _ False{}:
+      IO.pure(Service & List<&2, M.Request>, (svc, rs))
+    case 0n True{}:
+      IO.pure(Service & List<&2, M.Request>, (svc, rs))
+    case 1n+p True{}:
+      pump.round(calls_seen(svc), rs, 3, s => all => b => pump.go(p, s, all, b))
+
+# Reads what arrived (without waiting), answers every call against the
+# published tree, and returns the requests for the app to route, in
+# arrival order. While calls keep coming it keeps answering, up to 256
+# short rounds.
+def pump(svc: Service) -> IO(Service & List<&2, M.Request>):
+  pump.round(calls_seen(svc), Nil{}, 0, s => rs => b => pump.go(256n, s, rs, b))

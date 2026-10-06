@@ -22,6 +22,9 @@ type Change is Data:
   FocusGained{id: U32}
   Added{id: U32}
   Removed{id: U32}
+  WindowActivated{id: U32}
+  WindowDeactivated{id: U32}
+  Announced{id: U32, text: String, politeness: U32}
 
 type Delta is Data:
   Delta{child_removed: List<&2, Change>, removed: List<&2, Change>,
@@ -95,15 +98,40 @@ def when(changed: Bool, e: Change) -> List<&2, Change>:
     case True{}:
       [e]
 
+# The politeness of a live region: the "live" (or "container-live")
+# attribute, 1 polite, 2 assertive, 0 none (AT-SPI's AtspiLive).
+def politeness(at: List<&2, M.Attr>) -> U32:
+  match at:
+    case Nil{}:
+      0
+    case Con{M.Attr{+k, +v}, rest}:
+      Bool.pick(U32, String.eq(k, "live") || String.eq(k, "container-live"),
+        Bool.pick(U32, String.eq(v, "assertive"), 2, Bool.pick(U32, String.eq(v, "polite"), 1, 0)), politeness(rest))
+
+# A live region's new name is also an announcement: screen readers read
+# name changes only for the focused object, and announcements for any.
 def props(o: M.Node, n: M.Node) -> List<&2, Change>:
   M.Node{i0, p0, r0, nm0, d0, s0, a0, rl0, at0, b0, v0, c0} = o
   M.Node{+id, +p, +r, +nm, +d, s, a, rl, at, +b, v, c} = n
-  cat(when(Bool.not(String.eq(nm0, nm)), NameChanged{id, nm}),
+  +renamed = Bool.not(String.eq(nm0, nm))
+  +live = politeness(at)
+  cat(when(renamed, NameChanged{id, nm}),
+   cat(when(renamed && U32.is_ne(live, 0), Announced{id, nm, live}),
     cat(when(Bool.not(String.eq(d0, d)), DescriptionChanged{id, d}),
       cat(when(Bool.not(M.same_role(r0, r)), RoleChanged{id, r}),
         cat(value_events(id, v0, v),
           cat(when(Bool.not(box_eq(b0, b)), BoundsChanged{id, b}),
-            when(U32.is_ne(p0, p), ParentChanged{id, p}))))))
+            when(U32.is_ne(p0, p), ParentChanged{id, p})))))))
+
+# A frame that becomes active, or stops being active, is a window
+# activation (window:activate / window:deactivate), which screen readers
+# use to track the active window and to speak its title.
+def window_events(+r: M.Role, +id: U32, +old: List<&2, M.State>, +now: List<&2, M.State>, gain: Bool) -> List<&2, Change>:
+  +frame = M.same_role(r, M.Frame{})
+  +was = M.has_state(old, M.Active{})
+  +act = M.has_state(now, M.Active{})
+  Bool.pick(List<&2, Change>, gain, when(frame && act && Bool.not(was), WindowActivated{id}),
+    when(frame && was && Bool.not(act), WindowDeactivated{id}))
 
 # Children
 # --------
@@ -158,15 +186,31 @@ def node_delta(o: M.Node, n: M.Node) -> Delta:
   +old = o
   +now = n
   +id = M.node_id(now)
-  join(Delta{Nil{}, Nil{}, lost(id, M.node_states(old), M.node_states(now)), props(old, now), Nil{}, Nil{},
-    gained(id, M.node_states(now), M.node_states(old))},
+  +r = M.node_role(now)
+  join(Delta{Nil{}, Nil{}, cat(lost(id, M.node_states(old), M.node_states(now)), window_events(r, id, M.node_states(old), M.node_states(now), False{})),
+    props(old, now), Nil{}, Nil{},
+    cat(gained(id, M.node_states(now), M.node_states(old)), window_events(r, id, M.node_states(old), M.node_states(now), True{}))},
     children_delta(id, M.node_children(old), M.node_children(now)))
 
+def arriving(+frame: Bool, s: M.State) -> Bool:
+  +x = s
+  M.same_state(x, M.Focused{}) || (frame && M.same_state(x, M.Active{}))
+
+def arriving_states(+frame: Bool, ss: List<&2, M.State>) -> List<&2, M.State>:
+  match ss:
+    case Nil{}:
+      Nil{}
+    case Con{+x, rest}:
+      +tail = arriving_states(frame, rest)
+      Bool.pick(List<&2, M.State>, arriving(frame, x), Con{x, tail}, tail)
+
 # A node with no counterpart is announced to caches; if it arrives
-# focused, focus is announced too.
+# focused, focus is announced too, and an active frame is a window
+# activation.
 def arrival(n: M.Node) -> Delta:
-  M.Node{+id, p, r, nm, d, s, a, rl, at, b, v, c} = n
-  Delta{Nil{}, Nil{}, Nil{}, Nil{}, [Added{id}], Nil{}, gained(id, List.filter(~M.State, ~(x => M.same_state(x, M.Focused{})), s), Nil{})}
+  M.Node{+id, p, +r, nm, d, +s, a, rl, at, b, v, c} = n
+  Delta{Nil{}, Nil{}, Nil{}, Nil{}, [Added{id}], Nil{},
+    cat(gained(id, arriving_states(M.same_role(r, M.Frame{}), s), Nil{}), window_events(r, id, Nil{}, s, True{}))}
 
 def pair_delta(m: Maybe<&2, M.Node>, n: M.Node) -> Delta:
   match m:

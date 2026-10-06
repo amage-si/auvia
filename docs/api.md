@@ -63,7 +63,14 @@ StateChanged{id, state, on}   NameChanged{id, name}   DescriptionChanged{id, tex
 RoleChanged{id, role}         ValueChanged{id, value} BoundsChanged{id, bounds}
 ParentChanged{id, parent}     ChildAdded{parent, index, child}
 ChildRemoved{parent, index, child}  FocusGained{id}   Added{id}   Removed{id}
+WindowActivated{id}  WindowDeactivated{id}  Announced{id, text, politeness}
 ```
+
+A frame gaining or losing `active` is also a window (de)activation. A name
+change on a node whose `live` (or `container-live`) attribute is `polite` (1)
+or `assertive` (2) is also an announcement: screen readers speak name changes
+only for the focused object, announcements for any. Diffing from an empty
+tree (what `start` publishes) caches every node and activates active frames.
 
 Order of announcement: children removed (old index, last first), cache
 removals, states lost, property changes, cache additions, children added (new
@@ -112,7 +119,7 @@ invalidation stay Kairo's and Mokko's.
 | Function | Contract |
 | --- | --- |
 | `start(tree, log) -> IO(Service)` | Finds the accessibility bus (`AT_SPI_BUS_ADDRESS`, else `org.a11y.Bus.GetAddress` on the session bus), connects, authenticates, says Hello and sends `Socket.Embed` to the registry. On any failure the service is offline (`status` says why) and every other call is a no-op: the app runs on. |
-| `pump(svc) -> IO(Service & List<&2, M.Request>)` | Reads what arrived without waiting, answers every call against the published tree, and returns the requests in arrival order. Call once per frame. |
+| `pump(svc) -> IO(Service & List<&2, M.Request>)` | Reads what arrived without waiting, answers every call against the published tree, and returns the requests in arrival order. While calls keep arriving it answers again, waiting at most 3 ms per round for up to 256 rounds. Call once per frame. |
 | `publish(svc, tree) -> IO(Service)` | Diffs against the published tree, sends the signals, and publishes `tree`. Call after every change you draw. |
 | `status(svc) -> Service & String` | `live as :1.36, app id 3` or `offline: <reason>`. |
 | `stop(svc) -> IO(Unit)` | Closes the connection. |
@@ -151,7 +158,9 @@ Signals use the body `(siiva{sv})`: `Event.Object.StateChanged` (detail = state
 name, detail1 = 1/0), `PropertyChange` (`accessible-name`, `-description`,
 `-role`, `-value`, `-parent`), `BoundsChanged` (`(iiii)`), `ChildrenChanged`
 (`add`/`remove`, detail1 = index, data = child reference), and
-`Event.Focus.Focus` after a node gains focus.
+`Event.Focus.Focus` after a node gains focus, `Event.Window.Activate` /
+`Deactivate` on frames, and `Event.Object.Announcement` (detail1 =
+politeness, data = text).
 
 ## D-Bus (`dbus/`)
 
