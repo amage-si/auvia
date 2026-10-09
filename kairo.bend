@@ -30,6 +30,8 @@ def role(r: KT.Role) -> M.Role:
       M.PushButton{}
     case KT.TextRole{}:
       M.Label{}
+    case KT.EditRole{}:
+      M.Label{}
 
 def is_button(r: KT.Role) -> Bool:
   KN.is_button(r)
