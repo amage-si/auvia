@@ -9,6 +9,12 @@ import ./wire.bend as W
 def Res(-A: Type) -> Type:
   Result<&1, &1, U32 & String, A>
 
+# What TCP.send_bytes answers: a failure carries, beside the error, the
+# bytes the kernel did not take. A link that fails a send closes, so they
+# are dropped with the socket.
+def Sent(-A: Type) -> Type:
+  Result<&1, &1, (U32 & String) & List<&2, U32>, A>
+
 # A live link owns its socket, the bytes of an incomplete message, the next
 # serial and the unique name the bus assigned. A dead link says why.
 type Link is Type:
@@ -96,6 +102,10 @@ def reason(e: U32 & String) -> String:
   (code, text) = e
   text
 
+def reason.sent(e: (U32 & String) & List<&2, U32>) -> String:
+  (err, left) = e
+  reason(err)
+
 # Receiving
 # ---------
 
@@ -161,16 +171,16 @@ def batch(msgs: List<&2, W.Message>, +serial: U32) -> Batch:
     case Con{m, rest}:
       batch.join(W.encode(W.with_serial(m, serial)), batch(rest, next_serial(serial)))
 
-def sent.res(sock: Socket, r: Res(Unit), buf: List<&2, U32>, serial: U32, name: String) -> IO(Link):
+def sent.res(sock: Socket, r: Sent(Unit), buf: List<&2, U32>, serial: U32, name: String) -> IO(Link):
   match r:
     case Fail{e}:
       do IO<Link>:
         Socket.close(sock)
-        return Dead{reason(e)}
+        return Dead{reason.sent(e)}
     case Done{u}:
       IO.pure(Link, Live{sock, buf, serial, name})
 
-def sent(got: Socket & Res(Unit), buf: List<&2, U32>, serial: U32, name: String) -> IO(Link):
+def sent(got: Socket & Sent(Unit), buf: List<&2, U32>, serial: U32, name: String) -> IO(Link):
   (sock, r) = got
   sent.res(sock, r, buf, serial, name)
 
@@ -180,7 +190,7 @@ def send.bytes(sock: Socket, bytes: List<&2, U32>, buf: List<&2, U32>, serial: U
       IO.pure(Link, Live{sock, buf, serial, name})
     case Con{h, t}:
       do IO<Link>:
-        got : Socket & Res(Unit) <- TCP.send_bytes(sock, Con{h, t})
+        got : Socket & Sent(Unit) <- TCP.send_bytes(sock, Con{h, t})
         sent(got, buf, serial, name)
 
 def send.batch(sock: Socket, b: Batch, buf: List<&2, U32>, name: String) -> IO(Link):
@@ -318,13 +328,13 @@ def greeted(got: Link & Res(W.Message)) -> IO(Link):
   (link, r) = got
   greeted.res(link, r)
 
-def started(got: Socket & Res(Unit)) -> IO(Link):
+def started(got: Socket & Sent(Unit)) -> IO(Link):
   (sock, r) = got
   match r:
     case Fail{e}:
       do IO<Link>:
         Socket.close(sock)
-        return Dead{reason(e)}
+        return Dead{reason.sent(e)}
     case Done{u}:
       do IO<Link>:
         reply : Link & Res(W.Message) <- call(Live{sock, Nil{}, 1, ""}, hello())
@@ -338,7 +348,7 @@ def authed(sock: Socket, ok: Bool) -> IO(Link):
         return Dead{"auvia: the bus refused EXTERNAL authentication"}
     case True{}:
       do IO<Link>:
-        got : Socket & Res(Unit) <- TCP.send_bytes(sock, crlf("BEGIN"))
+        got : Socket & Sent(Unit) <- TCP.send_bytes(sock, crlf("BEGIN"))
         started(got)
 
 def line.res(sock: Socket, r: Res(Maybe<&2, List<&2, U32>>), acc: List<&2, U32>,
@@ -372,13 +382,13 @@ def line(fuel: Nat, sock: Socket, +acc: List<&2, U32>, done: Bool) -> IO(Link):
         got : Socket & Res(Maybe<&2, List<&2, U32>>) <- U.Unix.poll_bytes(sock, 512, 100)
         line.got(got, acc, s => +bs => line(p, s, bs, has_crlf(bs)))
 
-def asked(got: Socket & Res(Unit)) -> IO(Link):
+def asked(got: Socket & Sent(Unit)) -> IO(Link):
   (sock, r) = got
   match r:
     case Fail{e}:
       do IO<Link>:
         Socket.close(sock)
-        return Dead{reason(e)}
+        return Dead{reason.sent(e)}
     case Done{u}:
       line(50n, sock, Nil{}, False{})
 
@@ -389,7 +399,7 @@ def connected(r: Res(Socket)) -> IO(Link):
     case Done{sock}:
       do IO<Link>:
         uid : U32 <- U.Unix.uid()
-        got : Socket & Res(Unit) <- TCP.send_bytes(sock, auth_line(uid))
+        got : Socket & Sent(Unit) <- TCP.send_bytes(sock, auth_line(uid))
         asked(got)
 
 def open.path(path: Maybe<&2, String>) -> IO(Link):
