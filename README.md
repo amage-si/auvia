@@ -52,7 +52,7 @@ window focus and position, and presents through
 - Text editing from assistive technologies: `InsertText`, `DeleteText`,
   `SetTextContents`, `CutText`, `CopyText`, `PasteText`, `SetCaretOffset` and
   the selection calls on a Mokko field go through Mokko's `feed` and Kairo's
-  editing rules (`field.bend`), so what the layout or Kairo refuses (U+20AC,
+  editing rules (`field.bend`), so what the layout or Kairo refuses (U+2615,
   a line break, a text over the limit) is refused for the client too: the
   call returns false and the text, caret and selection stay as they were.
   The caller's answer waits for the app's verdict and is sent after the
