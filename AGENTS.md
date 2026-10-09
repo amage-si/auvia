@@ -51,7 +51,12 @@ through `M.Index`, a keyed tree (`keys.bend`, copied from Voltra) built once
 per tree, so diff, check and the AT-SPI answers are O(n log n). Still lists:
 the encoder writes a reversed byte `List` (the socket takes a list) and
 copies an array's items once per nesting level; `M.find` scans for one-off
-lookups. `examples/bench.bend` times these paths with output digests.
+lookups. Texts are short (a field holds at most 4096 scalars): each Text
+query walks the string or the caret stops once, with the decision carried
+as a parameter (no nested match on a computed value), and the diff finds a
+text's replacement with one prefix pass and one pass over the reversed
+rests. Held text calls are a short list per frame. `examples/bench.bend`
+times these paths with output digests.
 
 ## Linux first
 

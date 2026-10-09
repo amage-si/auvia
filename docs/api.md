@@ -7,12 +7,15 @@ directory uses:
 import Base
 import ./Auvia/model.bend as M
 import ./Auvia/kairo.bend as AK
+import ./Auvia/field.bend as AF
 import ./Auvia/service.bend as S
 ```
 
-`model.bend`, `diff.bend`, `dbus/wire.bend` and `atspi/*.bend` depend only on
-Base. `kairo.bend` also imports Mokko, Kairo and Tessra. `service.bend` and
-`dbus/bus.bend` perform IO through the native bridge.
+`model.bend`, `text.bend`, `diff.bend`, `dbus/wire.bend` and `atspi/*.bend`
+depend only on Base. `kairo.bend` also imports Mokko, Kairo and Tessra;
+`field.bend` also Mokko's field, Kairo's editing, Syllo's caret stops and
+Runika. `service.bend` and `dbus/bus.bend` perform IO through the native
+bridge.
 
 ## Model (`model.bend`)
 
@@ -22,12 +25,16 @@ Everything here is reusable data.
 Node{id: U32, parent: U32, role: Role, name: String, description: String,
   states: List<&2, State>, actions: List<&2, Action>,
   relations: List<&2, Relation>, attributes: List<&2, Attr>, bounds: Box,
-  value: Maybe<&2, Range>, children: List<&2, U32>}
+  value: Maybe<&2, Range>, text: Maybe<&2, Text>, children: List<&2, U32>}
 Tree{nodes: List<&2, Node>}
 Action{name, description, key}         Relation{kind: RelationKind, targets: List<&2, U32>}
 Attr{key, value}                       Box{x, y, width, height}    (F32)
 Range{current, min, max, step}         (F32)
-Request: Activate{id, index} | Focus{id}
+Text{content: String, count, caret, anchor: U32, origin_x, origin_y, line_height: F32,
+  stops: List<&2, Stop>}               Stop{index: U32, x: F32}
+Request: Activate{id, index} | Focus{id} | EditText{id, op: TextOp, ticket}
+TextOp: SetCaret{offset} | Select{start, end} | SetContents{text} | Insert{offset, text}
+  | Delete{start, end} | Copy{start, end} | Cut{start, end} | Paste{offset}
 ```
 
 - **Ids.** `0` is the application root (role `Application`). Every other node
@@ -38,7 +45,7 @@ Request: Activate{id, index} | Focus{id}
   ecosystem contract); the root has no geometry.
 - **Roles** (AT-SPI code): Application 75, Frame 23, Panel 39, Label 29,
   PushButton 43, ToggleButton 62, CheckBox 7, StatusBar 54, Heading 83,
-  Picture 27, Slider 51, ProgressBar 42, Unknown 67. `role_name` gives
+  Picture 27, Slider 51, ProgressBar 42, Entry 79, Unknown 67. `role_name` gives
   libatspi's names (`button`, `label`, ...).
 - **States** are AT-SPI's state types by bit (`state_bit`) and event detail
   (`state_name`): active, armed, busy, checked, defunct, editable, enabled,
@@ -48,6 +55,17 @@ Request: Activate{id, index} | Focus{id}
   the two `u32` words of `GetState`.
 - **Relations:** label-for 1, labelled-by 2, controller-for 3,
   controlled-by 4, description-for 17, described-by 18.
+- **Texts.** Offsets are Unicode scalars, which are AT-SPI's character
+  offsets. `count` is the content's length (`text.text(...)` computes it);
+  `caret` and `anchor` delimit the selection (equal: none). The text is one
+  line from `(origin_x, origin_y)`, `line_height` tall, in window
+  coordinates; `stops` are the caret stops (index, x from `origin_x`),
+  ascending, the last at the end. A combining mark has no stop of its own,
+  so it shares its base's character box. Mokko's `EditState` carries all
+  of it (`field.bend` converts).
+- **Requests.** `EditText` asks the app to perform a text operation, with
+  offsets already clamped to the text (negative or past the end means the
+  end; a start, 0). `ticket` identifies the held call (see `settle`).
 
 `check(tree)` returns `Done{Unit{}}` or the first `Problem`: `NoRoot`,
 `DuplicateId`, `BadParent` (a node its parent does not list), `MissingChild`
@@ -62,6 +80,21 @@ wins, as with `find`) and the place each child is listed at. `get`, `known`,
 for a single lookup. `check`, `diff`, the AT-SPI answers and the signals
 index the tree themselves; the service keeps its published tree indexed.
 
+## Text (`text.bend`)
+
+Pure queries over a `Text`: `slice(s, lo, hi)`, `span(stops, i)` (the
+cluster holding offset i), `string_at(t, i, granularity)` (0 character, 1
+word from its start to the next word's start, 2-4 the whole line; past the
+end, an empty character or word), `boundary_granularity` (GetTextAtOffset's
+boundary types), `scalar_at`, `char_box` and `range_box` (window
+coordinates; past the end, an empty box where the caret would stand),
+`offset_at(t, x, y)` (the nearest stop, ties left; -1 outside the line),
+`selection`, `has_selection`, `clamp_start`/`clamp_end` for requested
+offsets, and `change(old, new, n0, n1)`: the one replacement between two
+texts (common prefix and suffix kept, never overlapping). A word starts at a
+scalar other than space or NBSP, at 0 or after a space, and not at a
+combining mark (Kairo's rule).
+
 ## Diff (`diff.bend`)
 
 `diff(old, now) -> List<&2, Change>` (or `diff.indexed` over two `Index`
@@ -73,6 +106,8 @@ RoleChanged{id, role}         ValueChanged{id, value} BoundsChanged{id, bounds}
 ParentChanged{id, parent}     ChildAdded{parent, index, child}
 ChildRemoved{parent, index, child}  FocusGained{id}   Added{id}   Removed{id}
 WindowActivated{id}  WindowDeactivated{id}  Announced{id, text, politeness}
+TextRemoved{id, offset, length, text}  TextInserted{id, offset, length, text}
+CaretMoved{id, offset}  SelectionChanged{id}
 ```
 
 A frame gaining or losing `active` is also a window (de)activation. A name
@@ -83,7 +118,12 @@ tree (what `start` publishes) caches every node and activates active frames.
 
 Order of announcement: children removed (old index, last first), cache
 removals, states lost, property changes, cache additions, children added (new
-index, first first), states gained. So focus leaves the old node before it
+index, first first), states gained. A node whose text stays a text reports,
+after its other property changes: the replacement (`TextRemoved` then
+`TextInserted`, each only when not empty), `CaretMoved` when the caret
+moved, and `SelectionChanged` when the selection changed (a selection that
+stays empty while the caret moves is not one). A text that appears or goes
+reports nothing; clients read it afresh. So focus leaves the old node before it
 reaches the new one, and a new object is in caches before its parent lists it.
 A node whose children keep the same members in a new order is reported as all
 children moving out and back in. A newly added node reports only `focused` if it
@@ -97,8 +137,11 @@ re-read on demand).
 Surface{id: U32, title: String, width: F32, height: F32, active: Bool}
 Note{id: U32, description: String, relations: List<&2, M.Relation>,
   attributes: List<&2, M.Attr>, key: String}
+Content{id: U32, text: M.Text, placeholder: String}
 build(app: String, surface: Surface, semantics: List<&2, Mk.Semantic>, notes: List<&2, Note>) -> M.Tree
+build.with(app, surface, semantics, notes, contents: List<&2, Content>) -> M.Tree
 route(state: KT.State, request: M.Request) -> Routed{change: KT.Change, accepted: Bool}
+editable(state: KT.State, id: U32) -> Bool
 ```
 
 `build` makes root → frame (`surface.id`, must not collide with control ids) →
@@ -106,20 +149,58 @@ one node per Mokko `Semantic`, in Mokko's order (Kairo's Tab order). Buttons
 are `PushButton` with `focusable`; text is `Label`. `enabled` adds enabled and
 sensitive; Kairo focus adds focused; a held press (`Semantic.pressed`) adds
 `armed`, AT-SPI's "pressed but not released" (`pressed` is a toggle's latched
-state). Mokko's `Activate` becomes the action `click`. `Note`s add what Mokko
-does not carry yet.
+state). Mokko's `Activate` becomes the action `click`. Editable text
+(`EditRole`) is an `Entry`, focusable, `editable` and `single-line`, with
+the text of its `Content` (and the `placeholder-text` attribute when the
+placeholder is not empty). `Note`s add what Mokko does not carry yet.
 
 `route` performs what a request asks, through Kairo's own types:
 
 | Request | Accepted when | Change |
 | --- | --- | --- |
-| `Activate{id, 0}` | runtime live, `id` is an enabled, focusable button | `[Activated{id}]`, state unchanged — exactly what a click produces |
-| `Focus{id}` | runtime live, same eligibility | focus moves to `id`; a pending keyboard gesture is cancelled, as Tab does; only controls whose look changed are dirty |
+| `Activate{id, 0}` | runtime live, `id` is an enabled, focusable button (never a field) | `[Activated{id}]`, state unchanged — exactly what a click produces |
+| `Focus{id}` | runtime live, `id` is an enabled, focusable button or field | focus moves to `id`; a pending keyboard gesture is cancelled, as Tab does; only controls whose look changed are dirty |
+| `EditText{...}` | — (the field is the app's: see `field.bend`) | `unchanged`, `accepted = False` |
 | anything else | — | `unchanged`, `accepted = False` |
+
+`editable(state, id)`: the runtime is live and `id` is an enabled, focusable
+editable node; `field.bend` performs text requests only then.
 
 Feed `change` to the app's normal update path (for Mokko's demo,
 `D.changed(change, font, clicks, overflow)`), so counting, relabeling and
 invalidation stay Kairo's and Mokko's.
+
+## Mokko's text field (`field.bend`)
+
+```bend
+content(e: MF.EditState) -> AK.Content
+edit(font: F.Font, size: F32, bounds: G.Rect, state: KT.State, id: U32, f: MF.Field, r: M.Request)
+  -> Edited{fed: MF.Fed, accepted: Bool}
+```
+
+`content` turns the `EditState` of Mokko's `view` (`FieldView.edit`) into the
+field's `Content` for `build.with`. `edit` performs an `EditText` request on
+the field `id` laid out in `bounds` with `font` at `size`, through Mokko's
+`feed` and Kairo's `edit.bend`, as the user's typing is:
+
+| Op | Performed as |
+| --- | --- |
+| `SetCaret{o}` | `KE.place(o)` (snapped to a caret stop) |
+| `Select{a, b}` | anchor at `a`, caret at `b` |
+| `SetContents{t}` | select all, then `TextDelivered{t}` |
+| `Insert{o, t}` | caret at `o`, then `TextDelivered{t}`; the caret ends after `t` |
+| `Delete{a, b}` | select `[a, b)`, then `TextDelivered{""}` |
+| `Copy{a, b}` | `request = CopyText` of `[a, b)`; the field is unchanged |
+| `Cut{a, b}` | select `[a, b)`, then `EditRequested{Cut}` (`request = CopyText`) |
+| `Paste{o}` | caret at `o`, then `EditRequested{Paste}` (`request = PasteText`) |
+
+So every refusal applies: a scalar the layout or font cannot show, a
+control character or line break, a text over the limit. A refused request
+returns the original field with only its message set (`MF.refuse`), and
+`accepted = False`. Requests for another id, when `AK.editable` is false,
+and other requests leave the field unchanged and clean. Redraw when
+`fed.dirty` (it also counts a caret the request moved), and perform
+`fed.request` as for a key binding: the app owns the clipboard.
 
 ## Service (`service.bend`)
 
@@ -128,15 +209,20 @@ invalidation stay Kairo's and Mokko's.
 | Function | Contract |
 | --- | --- |
 | `start(tree, log) -> IO(Service)` | Finds the accessibility bus (`AT_SPI_BUS_ADDRESS`, else `org.a11y.Bus.GetAddress` on the session bus), connects, authenticates, says Hello and sends `Socket.Embed` to the registry. On any failure the service is offline (`status` says why) and every other call is a no-op: the app runs on. |
-| `pump(svc) -> IO(Service & List<&2, M.Request>)` | Reads what arrived without waiting, answers every call against the published tree, and returns the requests in arrival order. While calls keep arriving it answers again, waiting at most 3 ms per round for up to 256 rounds. Call once per frame. |
-| `publish(svc, tree) -> IO(Service)` | Diffs against the published tree, sends the signals, and publishes `tree`. Call after every change you draw. |
+| `pump(svc) -> IO(Service & List<&2, M.Request>)` | Sends the answers still owed to text calls (see `settle`), then reads what arrived without waiting, answers every call against the published tree, and returns the requests in arrival order. While calls keep arriving it answers again, waiting at most 3 ms per round for up to 256 rounds. Call once per frame. |
+| `settle(svc, request, ok) -> Service` | The app's verdict on a text request (`EditText`): performed (`True`) or refused. Its caller's answer (a boolean; nothing for `CopyText`) goes out with the next `publish`, after the change's signals, or the next `pump`. Settling `Activate` or `Focus` does nothing. A text request never settled is answered `False`. |
+| `publish(svc, tree) -> IO(Service)` | Diffs against the published tree, sends the signals, then the answers owed to settled (or unsettled: `False`) text calls, and publishes `tree`. Call after every change you draw. |
 | `status(svc) -> Service & String` | `live as :1.36, app id 3` or `offline: <reason>`. |
 | `moved(svc, x, y) -> Service` | Records the window's top-left corner on the screen (from the platform, e.g. Ankra's `Moved` event); `Component` answers in screen coordinates (coord type 0) add it. Until then the origin is (0, 0). |
 | `stop(svc) -> IO(Unit)` | Closes the connection. |
 
 With `log = True` the service prints each call it answers and each change it
-announces. Requests are answered before they are performed: `DoAction` replies
-`true` once validated, and the app applies it in the same frame.
+announces. `Activate` and `Focus` are answered before they are performed:
+`DoAction` replies `true` once validated, and the app applies it in the same
+frame. Text requests are held until the app settles them, because only the
+app's editing rules (and its font) know whether an edit is possible: a
+client calling `InsertText` gets `false` for a refused edit, and once its
+call returns the published tree already holds the new text.
 
 ## AT-SPI mapping (`atspi/`)
 
@@ -151,6 +237,8 @@ parent is the registry's desktop, a missing child is `/org/a11y/atspi/null`.
 | Component | non-root nodes | `Contains`, `GetAccessibleAtPoint` (direct child, ATK's semantics), `GetExtents`, `GetPosition`, `GetSize`, `GetLayer` (window 7 for frames, widget 3), `GetMDIZOrder` (0), `GrabFocus`, `GetAlpha` (1.0) |
 | Action | nodes with actions | `GetActions`, `GetName`, `GetLocalizedName`, `GetDescription`, `GetKeyBinding`, `DoAction`; property `NActions` |
 | Value | nodes with a range | properties `MinimumValue`, `MaximumValue`, `MinimumIncrement`, `CurrentValue`, `Text` (read-only) |
+| Text | nodes with a text | `GetText`, `GetStringAtOffset`, `GetTextAtOffset`, `GetCharacterAtOffset`, `GetCharacterExtents`, `GetRangeExtents`, `GetOffsetAtPoint`, `GetNSelections`, `GetSelection`, `GetAttributes`, `GetAttributeRun`, `GetDefaultAttributes`, `GetDefaultAttributeSet` (empty attributes, one run over the text); `SetCaretOffset`, `SetSelection`, `AddSelection`, `RemoveSelection` (held, see `settle`); properties `CharacterCount`, `CaretOffset` |
+| EditableText | nodes with a text and the `editable` state | `SetTextContents`, `InsertText` (the length argument is ignored), `DeleteText`, `CopyText`, `CutText`, `PasteText` (held, see `settle`) |
 | Cache | `/org/a11y/atspi/cache` | `GetItems` (`a((so)(so)(so)iiassusau)`); signals `AddAccessible`, `RemoveAccessible` |
 | Properties, Introspectable | every node | `Get`, `GetAll`, `Set` (only `Application.Id`), `Introspect` |
 | Peer | every path | `Ping` |
@@ -161,8 +249,17 @@ platform reports the window position. Integers are rounded.
 
 A call whose interface does not own the member, or whose object does not
 implement the interface, gets `org.freedesktop.DBus.Error.UnknownMethod`; an
-unknown path gets `UnknownObject` (except `Ping`/`Introspect`). Calls flagged
-`NO_REPLY_EXPECTED` are performed without a reply.
+unknown path gets `UnknownObject` (except `Ping`/`Introspect`). The
+interface also picks between members of the same name (`GetAttributes` on
+`Accessible` or `Text`); a call without one gets the first interface that
+has the member. Calls flagged `NO_REPLY_EXPECTED` are performed without a
+reply.
+
+Text requests are validated, then held: caret and selection calls need an
+enabled node, edits an enabled, editable one, and only selection 0 exists
+(`AddSelection` only when there is none); anything else is refused at once
+(`false`). Requested offsets are clamped as `EditText` says and ordered for
+ranges. Each held call gets a ticket, counting up per service.
 
 Signals use the body `(siiva{sv})`: `Event.Object.StateChanged` (detail = state
 name, detail1 = 1/0), `PropertyChange` (`accessible-name`, `-description`,
@@ -170,7 +267,9 @@ name, detail1 = 1/0), `PropertyChange` (`accessible-name`, `-description`,
 (`add`/`remove`, detail1 = index, data = child reference), and
 `Event.Focus.Focus` after a node gains focus, `Event.Window.Activate` /
 `Deactivate` on frames, and `Event.Object.Announcement` (detail1 =
-politeness, data = text).
+politeness, data = text), `Event.Object.TextChanged` (detail `insert` or
+`delete`, detail1 = offset, detail2 = length, data = the text),
+`TextCaretMoved` (detail1 = the caret) and `TextSelectionChanged`.
 
 ## D-Bus (`dbus/`)
 

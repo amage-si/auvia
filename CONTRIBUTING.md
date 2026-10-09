@@ -18,7 +18,12 @@ bend examples/counter.bend -o build/counter
 tools/demo_check.sh
 ```
 
-`tests.bend` runs without a display or a bus. `tools/demo_check.sh` needs an
+`tests.bend` runs without a display or a bus; it reads Liberation Sans
+(`/usr/share/fonts/liberation/LiberationSans-Regular.ttf`) to edit a real
+Mokko field. For the text field, build `examples/headless.bend` and run
+`tools/atspi_probe.py --app auvia-headless --button Incrementar
+--label-prefix Cliques: --field Nome` against it; `tools/orca_check.sh
+field` runs the same under a silent, isolated Orca. `tools/demo_check.sh` needs an
 X11/XWayland session, a running AT-SPI bus and `python3-gobject` with the
 `Atspi` typelib; it opens the counter, drives it, captures it under
 `build/evidence/` and always closes it. A change to the protocol or to what a
