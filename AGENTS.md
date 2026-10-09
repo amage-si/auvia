@@ -43,9 +43,15 @@ Correct Bend is not fast Bend by default. Measured rules (Bend 2.0.35):
 - Measure before and after on the same input; print a result before the next
   `IO.now()`.
 
-Here: the D-Bus byte path is a `List` with a closure per byte and nodes are
-found by id in lists: known debt. New code should read an `Array<U32>` with a
-position and look nodes up in a keyed tree (like Voltra's `keys.bend`).
+Here: incoming D-Bus bytes are loaded once into an `Array<U32>` and decoded
+at a position by one recursive def over a job stack (`run` in
+`dbus/wire.bend`); `drain` decodes frames in place and `recv` passes the
+leftover and new bytes to `drain.more` without appending. Nodes are looked up
+through `M.Index`, a keyed tree (`keys.bend`, copied from Voltra) built once
+per tree, so diff, check and the AT-SPI answers are O(n log n). Still lists:
+the encoder writes a reversed byte `List` (the socket takes a list) and
+copies an array's items once per nesting level; `M.find` scans for one-off
+lookups. `examples/bench.bend` times these paths with output digests.
 
 ## Linux first
 

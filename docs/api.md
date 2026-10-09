@@ -54,9 +54,18 @@ Request: Activate{id, index} | Focus{id}
 (a listed child that is absent or names another parent), `BadRelation`.
 Publish only trees that pass.
 
+`index(nodes)` / `indexed(tree)` build an `Index` once, in O(n log n): the
+nodes keyed by id in a Patricia trie (`keys.bend`; the first node with an id
+wins, as with `find`) and the place each child is listed at. `get`, `known`,
+`children_in` and `position` (the index in the parent) read it in O(log n);
+`find`, `has`, `lookup` and `index_in_parent` scan the list, which is fine
+for a single lookup. `check`, `diff`, the AT-SPI answers and the signals
+index the tree themselves; the service keeps its published tree indexed.
+
 ## Diff (`diff.bend`)
 
-`diff(old, now) -> List<&2, Change>`, where `Change` is one of:
+`diff(old, now) -> List<&2, Change>` (or `diff.indexed` over two `Index`
+values), where `Change` is one of:
 
 ```bend
 StateChanged{id, state, on}   NameChanged{id, name}   DescriptionChanged{id, text}
@@ -169,11 +178,14 @@ politeness, data = text).
 `DStr`, `DPath`, `DSig`, `DVar`, `DArr{sig, items}`, `DStruct`, `DEntry`, with
 `DSeq`/`DEnd` chains for sequences), `Message{kind, flags, serial, reply,
 path, iface, member, error, dest, sender, body}`, `encode`, `decode`, `drain`
-(split a byte stream into complete messages, keeping the rest), `marshal`,
+(split a byte stream into complete messages, keeping the rest; `drain.more`
+takes the leftover and the new bytes without joining the lists), `marshal`,
 `sig`, `f64` (exact F32 → double), and constructors `call`, `signal`,
 `method_return`, `error_reply`. Output is little-endian; input may be either
 byte order. Signed integers are carried as their two's-complement `U32`.
 Eight-byte integers decode to their bits as `DF64`.
+Decoding loads the bytes once into an `Array<U32>` and reads it at an offset,
+checking every length against the bytes present before reading.
 
 `bus.bend`: `Link` (`Live{sock, buf, serial, name}` or `Dead{reason}`),
 `open(address)` (unix `path=` or `abstract=`; SASL EXTERNAL with the uid as hex
