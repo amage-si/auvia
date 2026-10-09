@@ -54,7 +54,7 @@ def label(+id: U32, +v: U32) -> M.Node:
   M.Node{id, 1, M.PushButton{}, "n" ++ U32.show(id) ++ Bool.pick(String, changed && U32.is_eq((id % 3 : U32), 0), "!", ""), "",
     Bool.pick(List<&2, M.State>, U32.is_eq(id, (v * 5 + 2 : U32)), [M.Enabled{}, M.Focusable{}, M.Focused{}], [M.Enabled{}, M.Focusable{}]),
     [M.Action{"click", "", ""}], Nil{}, Nil{},
-    M.Box{Bool.pick(F32, changed && U32.is_eq((id % 4 : U32), 0), 24.0, 20.0), 60.0, 160.0, 44.0}, None{}, Nil{}}
+    M.Box{Bool.pick(F32, changed && U32.is_eq((id % 4 : U32), 0), 24.0, 20.0), 60.0, 160.0, 44.0}, None{}, None{}, Nil{}}
 
 def kept(+id: U32, +v: U32) -> Bool:
   U32.is_eq(v, 0) || U32.is_ne((id % 5 : U32), 0)
@@ -76,7 +76,7 @@ def nodes(n: Nat, +id: U32, +v: U32, tail: List<&2, M.Node>) -> List<&2, M.Node>
       Bool.pick(List<&2, M.Node>, kept(id, v), Con{label(id, v), rest}, rest)
 
 def frame(kids: List<&2, U32>) -> M.Node:
-  M.Node{1, 0, M.Frame{}, "Janela", "", [M.Enabled{}, M.Active{}], Nil{}, Nil{}, Nil{}, M.Box{0.0, 0.0, 400.0, 200.0}, None{}, kids}
+  M.Node{1, 0, M.Frame{}, "Janela", "", [M.Enabled{}, M.Active{}], Nil{}, Nil{}, Nil{}, M.Box{0.0, 0.0, 400.0, 200.0}, None{}, None{}, kids}
 
 # Version 0: buttons 2..n+1. Version 1: every fifth dropped, every third
 # renamed, every fourth moved, focus moved, and three new buttons.
@@ -152,6 +152,14 @@ def key(c: D.Change) -> String:
       "W" ++ U32.show(id)
     case D.Announced{id, t, level}:
       "A" ++ U32.show(id) ++ t ++ U32.show(level)
+    case D.TextRemoved{id, at, n, t}:
+      "t-" ++ U32.show(id) ++ ":" ++ U32.show(at) ++ ":" ++ t
+    case D.TextInserted{id, at, n, t}:
+      "t+" ++ U32.show(id) ++ ":" ++ U32.show(at) ++ ":" ++ t
+    case D.CaretMoved{id, at}:
+      "c" ++ U32.show(id) ++ ":" ++ U32.show(at)
+    case D.SelectionChanged{id}:
+      "S" ++ U32.show(id)
 
 def change_hash(c: D.Change, +h: U32) -> U32:
   str_hash(key(c), h)
@@ -181,7 +189,7 @@ def encoded_hash(ms: List<&2, W.Message>, +h: U32) -> U32:
       encoded_hash(rest, bytes_hash(W.encode(m), h))
 
 def served_text(s: S.Served) -> String:
-  S.Served{c, +out, rs} = s
+  S.Served{c, +out, rs, h, n} = s
   U32.show(count(W.Message, out)) ++ " replies, hash " ++ U32.show(encoded_hash(out, 7))
 
 # Runs

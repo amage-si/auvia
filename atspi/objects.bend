@@ -60,7 +60,7 @@ def desktop_ref() -> W.Value:
 
 # The root's parent is the registry's desktop.
 def parent_ref(ctx: Ctx, n: M.Node) -> W.Value:
-  M.Node{+id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  M.Node{+id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   Bool.pick(W.Value, U32.is_eq(id, 0), desktop_ref(), node_ref(ctx, p))
 
 def bus_name(ctx: Ctx) -> String:
@@ -84,6 +84,12 @@ def i_action() -> String:
 
 def i_value() -> String:
   "org.a11y.atspi.Value"
+
+def i_text() -> String:
+  "org.a11y.atspi.Text"
+
+def i_editable() -> String:
+  "org.a11y.atspi.EditableText"
 
 def i_cache() -> String:
   "org.a11y.atspi.Cache"
@@ -111,6 +117,13 @@ def has_actions(xs: List<&2, M.Action>) -> Bool:
     case _:
       True{}
 
+def has_text(m: Maybe<&2, M.Text>) -> Bool:
+  match m:
+    case None{}:
+      False{}
+    case Some{t}:
+      True{}
+
 def when(-A: Data, ok: Bool, x: A) -> List<&2, A>:
   match ok:
     case False{}:
@@ -120,14 +133,18 @@ def when(-A: Data, ok: Bool, x: A) -> List<&2, A>:
 
 # The AT-SPI interfaces a node implements: Accessible always; Application
 # on the root; Component on every node with geometry (all but the root);
-# Action when it has actions; Value when it has a range.
+# Action when it has actions; Value when it has a range; Text when it has a
+# text; EditableText when that text is editable (the Editable state).
 def interfaces(n: M.Node) -> List<&2, String>:
-  M.Node{+id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  M.Node{+id, p, r, nm, d, +s, a, rl, at, b, v, +tx, c} = n
+  +text = has_text(tx)
   Con{i_accessible(), List.concat(&2, String, [
     when(String, U32.is_eq(id, 0), i_application()),
     when(String, U32.is_ne(id, 0), i_component()),
     when(String, has_actions(a), i_action()),
-    when(String, has_value(v), i_value())])}
+    when(String, has_value(v), i_value()),
+    when(String, text, i_text()),
+    when(String, text && M.has_state(s, M.Editable{}), i_editable())])}
 
 def implements(xs: List<&2, String>, +iface: String) -> Bool:
   match xs:
@@ -282,7 +299,7 @@ def node_states_value(n: M.Node) -> W.Value:
 # i index in parent, i child count, as interfaces, s name, u role,
 # s description, au states).
 def cache_item(+ctx: Ctx, +ix: M.Index, +n: M.Node) -> W.Value:
-  M.Node{+id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  M.Node{+id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   W.tuple([node_ref(ctx, id), node_ref(ctx, 0), parent_ref(ctx, n),
     W.DI32{M.position(ix, n)}, W.DI32{M.count(c)}, strings(interfaces(n)),
     W.DStr{nm}, W.DU32{M.role_code(r)}, W.DStr{d}, state_value(s)])
@@ -354,6 +371,14 @@ def signals.in(+ctx: Ctx, +ix: M.Index, c: D.Change) -> List<&2, W.Message>:
       [event(id, "org.a11y.atspi.Event.Window", "Deactivate", "", 0, 0, W.DStr{""})]
     case D.Announced{id, text, level}:
       [object_event(id, "Announcement", "", level, 0, W.DStr{text})]
+    case D.TextRemoved{id, at, n, text}:
+      [object_event(id, "TextChanged", "delete", at, n, W.DStr{text})]
+    case D.TextInserted{id, at, n, text}:
+      [object_event(id, "TextChanged", "insert", at, n, W.DStr{text})]
+    case D.CaretMoved{id, at}:
+      [object_event(id, "TextCaretMoved", "", at, 0, W.DI32{0})]
+    case D.SelectionChanged{id}:
+      [object_event(id, "TextSelectionChanged", "", 0, 0, W.DI32{0})]
 
 def announce.go(+ctx: Ctx, +ix: M.Index, cs: List<&2, D.Change>) -> List<&2, W.Message>:
   match cs:

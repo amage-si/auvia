@@ -70,6 +70,8 @@ def request_text(r: M.Request) -> String:
       "activate " ++ U32.show(id) ++ " action " ++ U32.show(i)
     case M.Focus{id}:
       "focus " ++ U32.show(id)
+    case M.EditText{id, op, t}:
+      "text request on " ++ U32.show(id)
 
 def merged(routed: AK.Routed, +font: F.Font, clicks: Nat, overflow: Bool, dirty: Bool) -> Result<&2, &2, String, MV.Pending>:
   AK.Routed{change, accepted} = routed

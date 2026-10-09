@@ -1,6 +1,7 @@
 import Base
 import ./model.bend as M
 import ./keys.bend as K
+import ./text.bend as T
 
 # Diffing two published trees into the precise changes an assistive
 # technology needs, instead of rebuilding its view.
@@ -26,6 +27,10 @@ type Change is Data:
   WindowActivated{id: U32}
   WindowDeactivated{id: U32}
   Announced{id: U32, text: String, politeness: U32}
+  TextRemoved{id: U32, offset: U32, length: U32, text: String}
+  TextInserted{id: U32, offset: U32, length: U32, text: String}
+  CaretMoved{id: U32, offset: U32}
+  SelectionChanged{id: U32}
 
 type Delta is Data:
   Delta{child_removed: List<&2, Change>, removed: List<&2, Change>,
@@ -109,11 +114,44 @@ def politeness(at: List<&2, M.Attr>) -> U32:
       Bool.pick(U32, String.eq(k, "live") || String.eq(k, "container-live"),
         Bool.pick(U32, String.eq(v, "assertive"), 2, Bool.pick(U32, String.eq(v, "polite"), 1, 0)), politeness(rest))
 
+# Text: one replacement (removal, then insertion, as GTK reports a replaced
+# selection), then the caret, then the selection. A selection that stays
+# empty while the caret moves is not a selection change.
+def text_edit(+id: U32, c: T.Change) -> List<&2, Change>:
+  T.Change{+at, gone, +gone_n, came, +came_n} = c
+  cat(when(U32.is_ne(gone_n, 0), TextRemoved{id, at, gone_n, gone}), when(U32.is_ne(came_n, 0), TextInserted{id, at, came_n, came}))
+
+def text_moves(+id: U32, +a: M.Text, +b: M.Text) -> List<&2, Change>:
+  M.Text{c0, n0, +k0, +a0, ox0, oy0, lh0, st0} = a
+  M.Text{c1, n1, +k1, +a1, ox1, oy1, lh1, st1} = b
+  +lo0 = U32.min(k0, a0)
+  +hi0 = U32.max(k0, a0)
+  +lo1 = U32.min(k1, a1)
+  +hi1 = U32.max(k1, a1)
+  +empty = U32.is_eq(lo0, hi0) && U32.is_eq(lo1, hi1)
+  cat(when(U32.is_ne(k0, k1), CaretMoved{id, k1}),
+    when(Bool.not(empty) && (U32.is_ne(lo0, lo1) || U32.is_ne(hi0, hi1)), SelectionChanged{id}))
+
+def text_pair(+id: U32, a: M.Text, b: M.Text) -> List<&2, Change>:
+  M.Text{+c0, +n0, k0, a0, ox0, oy0, lh0, st0} = a
+  M.Text{+c1, +n1, k1, a1, ox1, oy1, lh1, st1} = b
+  +edits = Bool.pick(List<&2, Change>, String.eq(c0, c1), Nil{}, text_edit(id, T.change(c0, c1, n0, n1)))
+  cat(edits, text_moves(id, M.Text{c0, n0, k0, a0, ox0, oy0, lh0, st0}, M.Text{c1, n1, k1, a1, ox1, oy1, lh1, st1}))
+
+# Only a text that stays a text is diffed; one that appears or goes is
+# read afresh by clients.
+def text_events(+id: U32, old: Maybe<&2, M.Text>, now: Maybe<&2, M.Text>) -> List<&2, Change>:
+  match old now:
+    case Some{a} Some{b}:
+      text_pair(id, a, b)
+    case _ _:
+      Nil{}
+
 # A live region's new name is also an announcement: screen readers read
 # name changes only for the focused object, and announcements for any.
 def props(o: M.Node, n: M.Node) -> List<&2, Change>:
-  M.Node{i0, p0, r0, nm0, d0, s0, a0, rl0, at0, b0, v0, c0} = o
-  M.Node{+id, +p, +r, +nm, +d, s, a, rl, at, +b, v, c} = n
+  M.Node{i0, p0, r0, nm0, d0, s0, a0, rl0, at0, b0, v0, t0, c0} = o
+  M.Node{+id, +p, +r, +nm, +d, s, a, rl, at, +b, v, tx, c} = n
   +renamed = Bool.not(String.eq(nm0, nm))
   +live = politeness(at)
   cat(when(renamed, NameChanged{id, nm}),
@@ -122,7 +160,7 @@ def props(o: M.Node, n: M.Node) -> List<&2, Change>:
       cat(when(Bool.not(M.same_role(r0, r)), RoleChanged{id, r}),
         cat(value_events(id, v0, v),
           cat(when(Bool.not(box_eq(b0, b)), BoundsChanged{id, b}),
-            when(U32.is_ne(p0, p), ParentChanged{id, p})))))))
+            cat(when(U32.is_ne(p0, p), ParentChanged{id, p}), text_events(id, t0, tx))))))))
 
 # A frame that becomes active, or stops being active, is a window
 # activation (window:activate / window:deactivate), which screen readers
@@ -232,7 +270,7 @@ def arriving_states(+frame: Bool, ss: List<&2, M.State>) -> List<&2, M.State>:
 # focused, focus is announced too, and an active frame is a window
 # activation.
 def arrival(n: M.Node) -> Delta:
-  M.Node{+id, p, +r, nm, d, +s, a, rl, at, b, v, c} = n
+  M.Node{+id, p, +r, nm, d, +s, a, rl, at, b, v, tx, c} = n
   Delta{Nil{}, Nil{}, Nil{}, Nil{}, [Added{id}], Nil{},
     cat(gained(id, arriving_states(M.same_role(r, M.Frame{}), s), Nil{}), window_events(r, id, Nil{}, s, True{}))}
 

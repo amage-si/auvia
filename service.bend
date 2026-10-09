@@ -13,9 +13,14 @@ import ./atspi/serve.bend as S
 type Stats is Data:
   Stats{calls: U32, signals: U32, requests: U32}
 
+# Text calls waiting for the app's verdict (held), the answers of settled
+# ones (ready, newest first), and the next ticket.
+type Pending is Data:
+  Pending{held: List<&2, S.Held>, ready: List<&2, W.Message>, next: U32}
+
 # log: print one line per call answered and per signal batch sent.
 type Service is Type:
-  Service{link: B.Link, ctx: O.Ctx, tree: M.Index, stats: Stats, log: Bool}
+  Service{link: B.Link, ctx: O.Ctx, tree: M.Index, stats: Stats, log: Bool, pending: Pending}
 
 def a11y_address() -> W.Message:
   W.call("org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress", W.DEnd{})
@@ -114,6 +119,14 @@ def change_text(c: D.Change) -> String:
       "window deactivate " ++ U32.show(id)
     case D.Announced{id, t, level}:
       "announcement from " ++ U32.show(id) ++ " (live " ++ U32.show(level) ++ "): " ++ t
+    case D.TextRemoved{id, at, n, t}:
+      "text of " ++ U32.show(id) ++ " lost " ++ U32.show(n) ++ " at " ++ U32.show(at) ++ ": " ++ t
+    case D.TextInserted{id, at, n, t}:
+      "text of " ++ U32.show(id) ++ " gained " ++ U32.show(n) ++ " at " ++ U32.show(at) ++ ": " ++ t
+    case D.CaretMoved{id, at}:
+      "caret of " ++ U32.show(id) ++ " at " ++ U32.show(at)
+    case D.SelectionChanged{id}:
+      "selection of " ++ U32.show(id)
 
 def log_changes(on: Bool, cs: List<&2, D.Change>) -> IO(Unit):
   match on cs:
@@ -125,6 +138,74 @@ def log_changes(on: Bool, cs: List<&2, D.Change>) -> IO(Unit):
       do IO<Unit>:
         IO.print("auvia: emit " ++ change_text(c))
         log_changes(True{}, rest)
+
+# Held text calls
+# ---------------
+
+def no_pending() -> Pending:
+  Pending{Nil{}, Nil{}, 1}
+
+def verdicts(hs: List<&2, S.Held>, +ok: Bool) -> List<&2, W.Message>:
+  match hs:
+    case Nil{}:
+      Nil{}
+    case Con{h, rest}:
+      List.append(&2, W.Message, S.verdict(h, ok), verdicts(rest, ok))
+
+# The answers owed now: the settled ones in order, then a refusal for every
+# call the app did not settle.
+def owed(p: Pending) -> List<&2, W.Message>:
+  Pending{held, ready, next} = p
+  List.append(&2, W.Message, List.reverse(&2, W.Message, ready), verdicts(held, False{}))
+
+def cleared(p: Pending) -> Pending:
+  Pending{held, ready, next} = p
+  Pending{Nil{}, Nil{}, next}
+
+def ticket_of(h: S.Held) -> U32:
+  S.Held{t, c, q} = h
+  t
+
+# The held calls other than the ticket's.
+def others(hs: List<&2, S.Held>, +ticket: U32) -> List<&2, S.Held>:
+  match hs:
+    case Nil{}:
+      Nil{}
+    case Con{+h, more}:
+      +tail = others(more, ticket)
+      Bool.pick(List<&2, S.Held>, U32.is_eq(ticket_of(h), ticket), tail, Con{h, tail})
+
+# The answers to the ticket's call, newest first.
+def answers(hs: List<&2, S.Held>, +ticket: U32, +ok: Bool) -> List<&2, W.Message>:
+  match hs:
+    case Nil{}:
+      Nil{}
+    case Con{+h, more}:
+      Bool.pick(List<&2, W.Message>, U32.is_eq(ticket_of(h), ticket), S.verdict(h, ok), answers(more, ticket, ok))
+
+def take(p: Pending, +ticket: U32, +ok: Bool) -> Pending:
+  Pending{+held, ready, next} = p
+  Pending{others(held, ticket), List.append(&2, W.Message, answers(held, ticket, ok), ready), next}
+
+def settled(p: Pending, r: M.Request, +ok: Bool) -> Pending:
+  match r:
+    case M.EditText{id, op, +ticket}:
+      take(p, ticket, ok)
+    case _:
+      p
+
+# Records the app's verdict on a request pump returned: for a text request
+# (EditText), whether it was performed (True) or refused; its caller gets
+# that answer with the next publish (after the signals of the change) or
+# pump. Activate and Focus were answered when they arrived; settling them
+# does nothing. A text request never settled is answered False.
+def settle(svc: Service, r: M.Request, ok: Bool) -> Service:
+  Service{link, ctx, tree, stats, log, pend} = svc
+  Service{link, ctx, tree, stats, log, settled(pend, r, ok)}
+
+def held_more(p: Pending, more: List<&2, S.Held>, +next: U32) -> Pending:
+  Pending{held, ready, n} = p
+  Pending{List.append(&2, S.Held, held, more), ready, next}
 
 # Lifecycle
 # ---------
@@ -147,12 +228,12 @@ def registered(got: B.Link & String, +tree: M.Tree, locale: String, +log: Bool) 
   do IO<Service>:
     sent : B.Link <- B.send(link, Con{embed(name), O.announce.in(ctx, ix, changes)})
     log_changes(log, changes)
-    return Service{sent, ctx, ix, Stats{0, 0, 0}, log}
+    return Service{sent, ctx, ix, Stats{0, 0, 0}, log, no_pending()}
 
 def connected(r: B.Res(String), +tree: M.Tree, locale: String, log: Bool) -> IO(Service):
   match r:
     case Fail{e}:
-      IO.pure(Service, Service{B.Dead{B.reason(e)}, O.Ctx{"", 0, locale, 0.0, 0.0}, M.indexed(tree), Stats{0, 0, 0}, log})
+      IO.pure(Service, Service{B.Dead{B.reason(e)}, O.Ctx{"", 0, locale, 0.0, 0.0}, M.indexed(tree), Stats{0, 0, 0}, log, no_pending()})
     case Done{address}:
       do IO<Service>:
         link : B.Link <- B.open(address)
@@ -167,29 +248,29 @@ def start(tree: M.Tree, log: Bool) -> IO(Service):
     connected(r, tree, locale.pick(lang), log)
 
 def stop(svc: Service) -> IO(Unit):
-  Service{link, ctx, tree, stats, log} = svc
+  Service{link, ctx, tree, stats, log, pend} = svc
   B.close(link)
 
-def status.of(got: B.Link & String, +ctx: O.Ctx, tree: M.Index, stats: Stats, log: Bool) -> Service & String:
+def status.of(got: B.Link & String, +ctx: O.Ctx, tree: M.Index, stats: Stats, log: Bool, pend: Pending) -> Service & String:
   (link, +why) = got
   O.Ctx{+bus, +app, l, x, y} = ctx
-  (Service{link, ctx, tree, stats, log},
+  (Service{link, ctx, tree, stats, log, pend},
     Bool.pick(String, String.is_empty(why), "live as " ++ bus ++ ", app id " ++ U32.show(app), "offline: " ++ why))
 
 # "live as :1.36, app id 3" or the reason the service is offline.
 def status(svc: Service) -> Service & String:
-  Service{link, +ctx, tree, stats, log} = svc
-  status.of(B.reason_of(link), ctx, tree, stats, log)
+  Service{link, +ctx, tree, stats, log, pend} = svc
+  status.of(B.reason_of(link), ctx, tree, stats, log, pend)
 
 # Records where the window is on the screen, so Component answers in
 # screen coordinates use the real origin instead of (0, 0).
 def moved(svc: Service, +x: F32, +y: F32) -> Service:
-  Service{link, ctx, tree, stats, log} = svc
-  Service{link, O.at(ctx, x, y), tree, stats, log}
+  Service{link, ctx, tree, stats, log, pend} = svc
+  Service{link, O.at(ctx, x, y), tree, stats, log, pend}
 
 def stats(svc: Service) -> Service & Stats:
-  Service{link, ctx, tree, +st, log} = svc
-  (Service{link, ctx, tree, st, log}, st)
+  Service{link, ctx, tree, +st, log, pend} = svc
+  (Service{link, ctx, tree, st, log, pend}, st)
 
 # Publishing
 # ----------
@@ -198,15 +279,17 @@ def count(-A: Data, xs: List<&2, A>) -> U32:
   U32.from_nat(List.length(&2, A, xs))
 
 # Replaces the published tree, announcing exactly what changed.
+# Answers to settled text calls go after the signals, so a client that
+# reads the text when its call returns sees the change.
 def publish(svc: Service, +tree: M.Tree) -> IO(Service):
-  Service{link, +ctx, old, Stats{c, s, r}, +log} = svc
+  Service{link, +ctx, old, Stats{c, s, r}, +log, +pend} = svc
   +ix = M.indexed(tree)
   +changes = D.diff.indexed(old, ix)
   +msgs = O.announce.in(ctx, ix, changes)
   do IO<Service>:
     log_changes(log, changes)
-    sent : B.Link <- B.send(link, msgs)
-    return Service{sent, ctx, ix, Stats{c, (s + count(W.Message, msgs) : U32), r}, log}
+    sent : B.Link <- B.send(link, List.append(&2, W.Message, msgs, owed(pend)))
+    return Service{sent, ctx, ix, Stats{c, (s + count(W.Message, msgs) : U32), r}, log, cleared(pend)}
 
 # Answering
 # ---------
@@ -219,28 +302,32 @@ def calls(msgs: List<&2, W.Message>) -> List<&2, W.Message>:
       +tail = calls(rest)
       Bool.pick(List<&2, W.Message>, U32.is_eq(k, 1), Con{W.Message{k, f, s, r, p, i, m, e, d, sn, b}, tail}, tail)
 
-def answered(link: B.Link, served: S.Served, tree: M.Index, stats: Stats, +log: Bool, +n: U32) -> IO(Service & List<&2, M.Request>):
-  S.Served{ctx, out, +reqs} = served
+def answered(link: B.Link, served: S.Served, tree: M.Index, stats: Stats, +log: Bool, +n: U32, pend: Pending) -> IO(Service & List<&2, M.Request>):
+  S.Served{ctx, out, +reqs, held, +next} = served
   Stats{c, s, r} = stats
   do IO<Service & List<&2, M.Request>>:
     sent : B.Link <- B.send(link, out)
-    return (Service{sent, ctx, tree, Stats{(c + n : U32), s, (r + count(M.Request, reqs) : U32)}, log}, reqs)
+    return (Service{sent, ctx, tree, Stats{(c + n : U32), s, (r + count(M.Request, reqs) : U32)}, log, held_more(pend, held, next)}, reqs)
 
-def received(got: B.Link & List<&2, W.Message>, +ctx: O.Ctx, +tree: M.Index, stats: Stats, +log: Bool) -> IO(Service & List<&2, M.Request>):
+def next_ticket(p: Pending) -> U32:
+  Pending{h, r, next} = p
+  next
+
+def received(got: B.Link & List<&2, W.Message>, +ctx: O.Ctx, +tree: M.Index, stats: Stats, +log: Bool, +pend: Pending) -> IO(Service & List<&2, M.Request>):
   (link, +msgs) = got
   do IO<Service & List<&2, M.Request>>:
     log_calls(log, calls(msgs))
-    answered(link, S.serve.in(msgs, ctx, tree), tree, stats, log, count(W.Message, calls(msgs)))
+    answered(link, S.serve.in(msgs, ctx, tree, next_ticket(pend)), tree, stats, log, count(W.Message, calls(msgs)), pend)
 
 def calls_seen(svc: Service) -> Service & U32:
-  Service{link, ctx, tree, Stats{+c, s, r}, log} = svc
-  (Service{link, ctx, tree, Stats{c, s, r}, log}, c)
+  Service{link, ctx, tree, Stats{+c, s, r}, log, pend} = svc
+  (Service{link, ctx, tree, Stats{c, s, r}, log, pend}, c)
 
 def pump.once(svc: Service, ms: U32) -> IO(Service & List<&2, M.Request>):
-  Service{link, ctx, tree, stats, log} = svc
+  Service{link, ctx, tree, stats, log, pend} = svc
   do IO<Service & List<&2, M.Request>>:
     got : B.Link & List<&2, W.Message> <- B.recv(link, ms)
-    received(got, ctx, tree, stats, log)
+    received(got, ctx, tree, stats, log, pend)
 
 def pump.counted(seen: Service & U32, rs: List<&2, M.Request>, +before: U32,
   k: Service -> List<&2, M.Request> -> Bool -> IO(Service & List<&2, M.Request>)) -> IO(Service & List<&2, M.Request>):
@@ -278,5 +365,32 @@ def pump.go(fuel: Nat, svc: Service, rs: List<&2, M.Request>, busy: Bool) -> IO(
 # published tree, and returns the requests for the app to route, in
 # arrival order. While calls keep coming it keeps answering, up to 256
 # short rounds.
-def pump(svc: Service) -> IO(Service & List<&2, M.Request>):
+def pump.rounds(svc: Service) -> IO(Service & List<&2, M.Request>):
   pump.round(calls_seen(svc), Nil{}, 0, s => rs => b => pump.go(256n, s, rs, b))
+
+def owing(p: Pending) -> Bool:
+  Pending{held, ready, next} = p
+  Bool.not(List.is_empty(&2, S.Held, held) && List.is_empty(&2, W.Message, ready))
+
+def pump.owed(owes: Bool, svc: Service) -> IO(Service & List<&2, M.Request>):
+  match owes:
+    case False{}:
+      pump.rounds(svc)
+    case True{}:
+      Service{link, ctx, tree, stats, log, +pend} = svc
+      do IO<Service & List<&2, M.Request>>:
+        sent : B.Link <- B.send(link, owed(pend))
+        pump.rounds(Service{sent, ctx, tree, stats, log, cleared(pend)})
+
+def pending_of(svc: Service) -> Service & Pending:
+  Service{link, ctx, tree, stats, log, +pend} = svc
+  (Service{link, ctx, tree, stats, log, pend}, pend)
+
+def pump.start(got: Service & Pending) -> IO(Service & List<&2, M.Request>):
+  (svc, pend) = got
+  pump.owed(owing(pend), svc)
+
+# Text answers still owed from the last frame (settled, or refused when
+# never settled) go out first.
+def pump(svc: Service) -> IO(Service & List<&2, M.Request>):
+  pump.start(pending_of(svc))

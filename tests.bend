@@ -5,6 +5,11 @@ import ./dbus/wire.bend as W
 import ./atspi/objects.bend as O
 import ./atspi/serve.bend as S
 import ./kairo.bend as AK
+import ./text.bend as T
+import ./field.bend as AF
+import ../Mokko/field.bend as MF
+import ../Kairo/edit.bend as KE
+import ../Runika/font.bend as F
 import ../Mokko/main.bend as Mk
 import ../Kairo/types.bend as KT
 import ../Kairo/main.bend as K
@@ -25,15 +30,15 @@ def with_focus(on: Bool, +ss: List<&2, M.State>) -> List<&2, M.State>:
 def button(+id: U32, name: String, +focused: Bool, +enabled: Bool, box: M.Box) -> M.Node:
   M.Node{id, 1, M.PushButton{}, name, "Soma um",
     with_focus(focused, Bool.pick(List<&2, M.State>, enabled, List.append(&2, M.State, visible(), [M.Focusable{}]), [M.Visible{}, M.Showing{}, M.Focusable{}])),
-    [M.Action{"click", "", "space"}], [M.Relation{M.ControllerFor{}, [3]}], Nil{}, box, None{}, Nil{}}
+    [M.Action{"click", "", "space"}], [M.Relation{M.ControllerFor{}, [3]}], Nil{}, box, None{}, None{}, Nil{}}
 
 def label(text: String) -> M.Node:
   M.Node{3, 1, M.Label{}, text, "", visible(), Nil{}, [M.Relation{M.ControlledBy{}, [2]}], [M.Attr{"live", "polite"}],
-    M.Box{20.0, 120.0, 160.0, 24.0}, None{}, Nil{}}
+    M.Box{20.0, 120.0, 160.0, 24.0}, None{}, None{}, Nil{}}
 
 def frame(kids: List<&2, U32>) -> M.Node:
   M.Node{1, 0, M.Frame{}, "Janela", "", List.append(&2, M.State, visible(), [M.Active{}]), Nil{}, Nil{}, Nil{},
-    M.Box{0.0, 0.0, 400.0, 200.0}, None{}, kids}
+    M.Box{0.0, 0.0, 400.0, 200.0}, None{}, None{}, kids}
 
 def b2(+focus: U32) -> M.Node:
   button(2, "Clique aqui", U32.is_eq(focus, 2), True{}, M.Box{20.0, 60.0, 160.0, 44.0})
@@ -79,6 +84,14 @@ def key(c: D.Change) -> String:
       "window-:" ++ U32.show(id)
     case D.Announced{id, t, level}:
       "announce:" ++ U32.show(id) ++ ":" ++ t ++ ":" ++ U32.show(level)
+    case D.TextRemoved{id, at, n, t}:
+      "text-:" ++ U32.show(id) ++ ":" ++ U32.show(at) ++ ":" ++ U32.show(n) ++ ":" ++ t
+    case D.TextInserted{id, at, n, t}:
+      "text+:" ++ U32.show(id) ++ ":" ++ U32.show(at) ++ ":" ++ U32.show(n) ++ ":" ++ t
+    case D.CaretMoved{id, at}:
+      "caret:" ++ U32.show(id) ++ ":" ++ U32.show(at)
+    case D.SelectionChanged{id}:
+      "selection:" ++ U32.show(id)
 
 def keys(cs: List<&2, D.Change>) -> String:
   match cs:
@@ -103,7 +116,7 @@ def grown() -> M.Tree:
 
 def inactive() -> M.Tree:
   M.Tree{[M.application("app", [1]), M.Node{1, 0, M.Frame{}, "Janela", "", visible(), Nil{}, Nil{}, Nil{},
-    M.Box{0.0, 0.0, 400.0, 200.0}, None{}, [2, 3, 4]}, b2(0), label("Cliques: 0"), b4(0)]}
+    M.Box{0.0, 0.0, 400.0, 200.0}, None{}, None{}, [2, 3, 4]}, b2(0), label("Cliques: 0"), b4(0)]}
 
 def shrunk() -> M.Tree:
   M.Tree{[M.application("app", [1]), frame([2]), b2(0)]}
@@ -345,7 +358,7 @@ def encode_all(ms: List<&2, W.Message>) -> List<&2, U32>:
       List.append(&2, U32, W.encode(m), encode_all(rest))
 
 def reply_digest(s: S.Served) -> String:
-  S.Served{c, out, rs} = s
+  S.Served{c, out, rs, h, nx} = s
   digest(encode_all(out))
 
 def is_int(v: W.Value, +x: U32) -> Bool:
@@ -379,11 +392,11 @@ def ask(m: W.Message) -> S.Served:
   serve1(m, fixture(0, "Cliques: 0"))
 
 def first_out(s: S.Served) -> Maybe<&2, W.Message>:
-  S.Served{c, out, r} = s
+  S.Served{c, out, r, h, nx} = s
   List.head(&2, W.Message, out)
 
 def out_count(s: S.Served) -> U32:
-  S.Served{c, out, r} = s
+  S.Served{c, out, r, h, nx} = s
   U32.from_nat(List.length(&2, W.Message, out))
 
 def kind_of(m: Maybe<&2, W.Message>) -> U32:
@@ -413,8 +426,27 @@ def reply_sig(s: S.Served) -> String:
   W.sig(body_of(first_out(s)))
 
 def requests(s: S.Served) -> List<&2, M.Request>:
-  S.Served{c, out, r} = s
+  S.Served{c, out, r, h, nx} = s
   r
+
+def op_text(op: M.TextOp) -> String:
+  match op:
+    case M.SetCaret{o}:
+      "caret:" ++ U32.show(o)
+    case M.Select{a, b}:
+      "select:" ++ U32.show(a) ++ "-" ++ U32.show(b)
+    case M.SetContents{t}:
+      "contents:" ++ t
+    case M.Insert{o, t}:
+      "insert:" ++ U32.show(o) ++ ":" ++ t
+    case M.Delete{a, b}:
+      "delete:" ++ U32.show(a) ++ "-" ++ U32.show(b)
+    case M.Copy{a, b}:
+      "copy:" ++ U32.show(a) ++ "-" ++ U32.show(b)
+    case M.Cut{a, b}:
+      "cut:" ++ U32.show(a) ++ "-" ++ U32.show(b)
+    case M.Paste{o}:
+      "paste:" ++ U32.show(o)
 
 def req_text(rs: List<&2, M.Request>) -> String:
   match rs:
@@ -424,9 +456,11 @@ def req_text(rs: List<&2, M.Request>) -> String:
       "activate:" ++ U32.show(id) ++ ":" ++ U32.show(i) ++ ";" ++ req_text(rest)
     case Con{M.Focus{id}, rest}:
       "focus:" ++ U32.show(id) ++ ";" ++ req_text(rest)
+    case Con{M.EditText{id, op, t}, rest}:
+      "edit:" ++ U32.show(id) ++ ":" ++ op_text(op) ++ "#" ++ U32.show(t) ++ ";" ++ req_text(rest)
 
 def app_id(s: S.Served) -> U32:
-  S.Served{O.Ctx{b, id, l, x, y}, out, r} = s
+  S.Served{O.Ctx{b, id, l, x, y}, out, r, h, nx} = s
   id
 
 def is_bool(v: W.Value, b: Bool) -> Bool:
@@ -490,7 +524,7 @@ def state_lo(v: W.Value) -> U32:
 
 def slider(+current: F32) -> M.Node:
   M.Node{6, 1, M.Slider{}, "Volume", "", List.append(&2, M.State, visible(), [M.Focusable{}]), Nil{}, Nil{}, Nil{},
-    M.Box{20.0, 160.0, 200.0, 20.0}, Some{M.Range{current, 0.0, 10.0, 0.5}}, Nil{}}
+    M.Box{20.0, 160.0, 200.0, 20.0}, Some{M.Range{current, 0.0, 10.0, 0.5}}, None{}, Nil{}}
 
 def with_slider(+current: F32) -> M.Tree:
   M.Tree{[M.application("app", [1]), frame([6]), slider(current)]}
@@ -602,7 +636,7 @@ def node_text(m: Maybe<&2, M.Node>) -> String:
   match m:
     case None{}:
       "missing"
-    case Some{M.Node{id, p, r, nm, d, s, a, rl, at, b, v, c}}:
+    case Some{M.Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c}}:
       U32.show(id) ++ "<" ++ U32.show(p) ++ ":" ++ M.role_name(r) ++ ":" ++ nm ++ ":" ++ d ++ ":" ++ U32.show(M.count(c))
 
 # End to end: an AT-SPI DoAction becomes exactly one Kairo activation, and
@@ -622,6 +656,130 @@ def e2e.requested(rs: List<&2, M.Request>, +before: M.Tree) -> String:
 def e2e() -> String:
   +before = built(kstate())
   e2e.requested(requests(serve1(call(node_path(2), "org.a11y.atspi.Action", "DoAction", W.seq([W.DI32{0}])), before)), before)
+
+
+# Text
+# ----
+
+def tstops.go(n: Nat, +i: U32) -> List<&2, M.Stop>:
+  match n:
+    case 0n:
+      [M.Stop{i, (U32.to_f32(i) * 10.0 : F32)}]
+    case 1n+p:
+      Con{M.Stop{i, (U32.to_f32(i) * 10.0 : F32)}, tstops.go(p, (i + 1 : U32))}
+
+# One caret stop every 10 units, at 0 to n.
+def tstops(n: Nat) -> List<&2, M.Stop>:
+  tstops.go(n, 0)
+
+def ttext(content: String, +caret: U32, +anchor: U32, stops: List<&2, M.Stop>) -> M.Text:
+  T.text(content, caret, anchor, 30.0, 160.0, 20.0, stops)
+
+# "olá mundo": 9 scalars, one stop each; the line at (30, 160), 20 tall.
+def ola(+caret: U32, +anchor: U32) -> M.Text:
+  ttext("olá mundo", caret, anchor, tstops(9n))
+
+# "café" with a combining acute: 5 scalars, 4 clusters (no stop at 4).
+def cafe_text() -> String:
+  "cafe" ++ SCon{Chr{769}, SNil{}}
+
+def cafe() -> M.Text:
+  ttext(cafe_text(), 0, 0, [M.Stop{0, 0.0}, M.Stop{1, 10.0}, M.Stop{2, 20.0}, M.Stop{3, 30.0}, M.Stop{5, 40.0}])
+
+def entry_states(+enabled: Bool) -> List<&2, M.State>:
+  Bool.pick(List<&2, M.State>, enabled, [M.Enabled{}, M.Sensitive{}, M.Visible{}, M.Showing{}, M.Focusable{}, M.Editable{}, M.SingleLine{}],
+    [M.Visible{}, M.Showing{}, M.Focusable{}, M.Editable{}, M.SingleLine{}])
+
+def entry(t: M.Text, +enabled: Bool) -> M.Node:
+  M.Node{7, 1, M.Entry{}, "Nome", "", entry_states(enabled), Nil{}, Nil{}, Nil{}, M.Box{20.0, 150.0, 260.0, 40.0}, None{}, Some{t}, Nil{}}
+
+def with_entry(t: M.Text, +enabled: Bool) -> M.Tree:
+  M.Tree{[M.application("app", [1]), frame([7]), entry(t, enabled)]}
+
+# A label with a text but no Editable state: Text without EditableText.
+def read_only() -> M.Tree:
+  M.Tree{[M.application("app", [1]), frame([7]), M.Node{7, 1, M.Label{}, "x", "", visible(), Nil{}, Nil{}, Nil{},
+    M.Box{20.0, 150.0, 260.0, 40.0}, None{}, Some{ola(0, 0)}, Nil{}}]}
+
+def tcall(member: String, body: W.Value) -> W.Message:
+  call(node_path(7), "org.a11y.atspi.Text", member, body)
+
+def ecall(member: String, body: W.Value) -> W.Message:
+  call(node_path(7), "org.a11y.atspi.EditableText", member, body)
+
+def task(m: W.Message) -> S.Served:
+  serve1(m, with_entry(ola(3, 3), True{}))
+
+def outs(s: S.Served) -> String:
+  vtext(body_of(first_out(s)))
+
+def held_of(s: S.Served) -> List<&2, S.Held>:
+  S.Served{c, out, r, h, nx} = s
+  h
+
+def held_count(s: S.Served) -> U32:
+  U32.from_nat(List.length(&2, S.Held, held_of(s)))
+
+def verdict_of(hs: List<&2, S.Held>, ok: Bool) -> String:
+  match hs:
+    case Con{h, rest}:
+      fulls_text(S.verdict(h, ok))
+    case Nil{}:
+      "none"
+
+def answer_of(s: S.Served, ok: Bool) -> String:
+  verdict_of(held_of(s), ok)
+
+def entry_diff(a: M.Text, b: M.Text) -> String:
+  diffs(with_entry(a, True{}), with_entry(b, True{}))
+
+def golden_insert_call() -> List<&2, U32>:
+  [108,1,0,1,16,0,0,0,12,0,0,0,147,0,0,0,7,1,115,0,4,0,0,0,58,49,46,57,0,0,0,0,1,1,111,0,28,0,0,0,47,111,114,103,47,97,49,49,121,47,97,116,115,112,105,47,97,99,99,101,115,115,105,98,108,101,47,55,0,0,0,0,2,1,115,0,27,0,0,0,111,114,103,46,97,49,49,121,46,97,116,115,112,105,46,69,100,105,116,97,98,108,101,84,101,120,116,0,0,0,0,0,6,1,115,0,5,0,0,0,58,49,46,52,50,0,0,0,8,1,103,0,3,105,115,105,0,0,0,0,0,0,0,0,3,1,115,0,10,0,0,0,73,110,115,101,114,116,84,101,120,116,0,0,0,0,0,0,3,0,0,0,3,0,0,0,226,130,172,0,3,0,0,0]
+
+def golden_string_call() -> List<&2, U32>:
+  [108,1,0,1,8,0,0,0,13,0,0,0,138,0,0,0,7,1,115,0,4,0,0,0,58,49,46,57,0,0,0,0,1,1,111,0,28,0,0,0,47,111,114,103,47,97,49,49,121,47,97,116,115,112,105,47,97,99,99,101,115,115,105,98,108,101,47,55,0,0,0,0,2,1,115,0,19,0,0,0,111,114,103,46,97,49,49,121,46,97,116,115,112,105,46,84,101,120,116,0,0,0,0,0,6,1,115,0,5,0,0,0,58,49,46,52,50,0,0,0,8,1,103,0,2,105,117,0,3,1,115,0,17,0,0,0,71,101,116,83,116,114,105,110,103,65,116,79,102,102,115,101,116,0,0,0,0,0,0,0,5,0,0,0,1,0,0,0]
+
+def golden_text_changed_body() -> List<&2, U32>:
+  [6,0,0,0,105,110,115,101,114,116,0,0,3,0,0,0,3,0,0,0,1,115,0,0,3,0,0,0,120,121,122,0,0,0,0,0,0,0,0,0]
+
+def golden_caret_body() -> List<&2, U32>:
+  [0,0,0,0,0,0,0,0,6,0,0,0,0,0,0,0,1,105,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+
+def golden_extents_body() -> List<&2, U32>:
+  [50,0,0,0,160,0,0,0,10,0,0,0,20,0,0,0]
+
+def golden_string_body() -> List<&2, U32>:
+  [5,0,0,0,109,117,110,100,111,0,0,0,4,0,0,0,9,0,0,0]
+
+def decoded(m: Maybe<&2, W.Message>) -> W.Message:
+  match m:
+    case None{}:
+      sample()
+    case Some{x}:
+      x
+
+def reply_bytes(s: S.Served) -> List<&2, U32>:
+  body_bytes(body_of(first_out(s)))
+
+def signal_bytes(c: D.Change) -> List<&2, U32>:
+  body_bytes(body_of(signal_of(c)))
+
+def fbuilt(s: KT.State, t: M.Text) -> M.Tree:
+  AK.build.with("app", AK.Surface{100, "Janela", 480.0, 320.0, True{}}, semantics(s), notes(), [AK.Content{7, t, "Seu nome"}])
+
+def attrs_text(xs: List<&2, M.Attr>) -> String:
+  match xs:
+    case Nil{}:
+      ""
+    case Con{M.Attr{k, v}, rest}:
+      k ++ "=" ++ v ++ ";" ++ attrs_text(rest)
+
+def attrs_of(m: Maybe<&2, M.Node>) -> String:
+  match m:
+    case Some{M.Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c}}:
+      attrs_text(at)
+    case None{}:
+      "missing"
 
 type Check is Data:
   Check{ok: Bool, name: String}
@@ -734,8 +892,132 @@ def checks.kairo() -> List<&2, Check>:
     Check{Bool.not(accepted(AK.route(fstate(True{}), M.Activate{7, 0}))) && accepted(AK.route(fstate(True{}), M.Focus{7})), "kairo: activate requires a button; a field can take focus"}
   ]
 
+def checks.text() -> List<&2, Check>:
+  [
+    Check{same(vtext(reply_arg(task(call(node_path(7), acc(), "GetInterfaces", W.DEnd{})))), "as[s'org.a11y.atspi.Accessible',s'org.a11y.atspi.Component',s'org.a11y.atspi.Text',s'org.a11y.atspi.EditableText',.]"), "text: an entry implements Text and EditableText"},
+    Check{U32.is_eq(W.word(reply_arg(task(call(node_path(7), acc(), "GetRole", W.DEnd{})))), 79) && same(W.text(reply_arg(task(call(node_path(7), acc(), "GetRoleName", W.DEnd{})))), "entry"), "text: entry role (79, \"entry\")"},
+    Check{same(vtext(reply_arg(serve1(call(node_path(7), acc(), "GetInterfaces", W.DEnd{}), read_only()))), "as[s'org.a11y.atspi.Accessible',s'org.a11y.atspi.Component',s'org.a11y.atspi.Text',.]") && same(reply_error(serve1(ecall("InsertText", W.seq([W.DI32{0}, W.DStr{"x"}, W.DI32{1}])), read_only())), "org.freedesktop.DBus.Error.UnknownMethod"), "text: a text without the editable state has no EditableText"},
+    Check{same(reply_error(ask(call(node_path(3), "org.a11y.atspi.Text", "GetText", W.seq([W.DI32{0}, W.DI32{(0 - 1 : U32)}])))), "org.freedesktop.DBus.Error.UnknownMethod"), "text: a label without a text has no Text"},
+    Check{same(outs(task(tcall("GetText", W.seq([W.DI32{0}, W.DI32{(0 - 1 : U32)}])))), "s'olá mundo',.") && same(outs(task(tcall("GetText", W.seq([W.DI32{4}, W.DI32{9}])))), "s'mundo',.") && same(outs(task(tcall("GetText", W.seq([W.DI32{7}, W.DI32{99}])))), "s'do',."), "text: GetText slices by scalar; -1 and past the end mean the end"},
+    Check{same(vtext(reply_arg(task(call(node_path(7), "org.freedesktop.DBus.Properties", "Get", W.seq([W.DStr{"org.a11y.atspi.Text"}, W.DStr{"CharacterCount"}]))))), "v<i9>") && same(vtext(reply_arg(task(call(node_path(7), "org.freedesktop.DBus.Properties", "Get", W.seq([W.DStr{"org.a11y.atspi.Text"}, W.DStr{"CaretOffset"}]))))), "v<i3>"), "text: CharacterCount and CaretOffset properties"},
+    Check{same(outs(task(tcall("GetStringAtOffset", W.seq([W.DI32{5}, W.DU32{1}])))), "s'mundo',i4,i9,.") && same(outs(task(tcall("GetStringAtOffset", W.seq([W.DI32{3}, W.DU32{1}])))), "s'olá ',i0,i4,.") && same(outs(task(tcall("GetStringAtOffset", W.seq([W.DI32{2}, W.DU32{0}])))), "s'á',i2,i3,."), "text: word (to the next word's start) and character at an offset"},
+    Check{same(outs(task(tcall("GetStringAtOffset", W.seq([W.DI32{9}, W.DU32{3}])))), "s'olá mundo',i0,i9,.") && same(outs(task(tcall("GetStringAtOffset", W.seq([W.DI32{9}, W.DU32{0}])))), "s'',i9,i9,.") && same(outs(task(tcall("GetTextAtOffset", W.seq([W.DI32{5}, W.DU32{1}])))), "s'mundo',i4,i9,."), "text: the line is the whole text; nothing past the end; GetTextAtOffset maps boundaries"},
+    Check{same(outs(serve1(tcall("GetStringAtOffset", W.seq([W.DI32{4}, W.DU32{0}])), with_entry(cafe(), True{}))), "s'" ++ "e" ++ SCon{Chr{769}, SNil{}} ++ "',i3,i5,."), "text: a combining mark belongs to its base's character"},
+    Check{same(outs(task(tcall("GetCharacterExtents", W.seq([W.DI32{2}, W.DU32{1}])))), "i50,i160,i10,i20,.") && same(outs(S.serve([tcall("GetCharacterExtents", W.seq([W.DI32{2}, W.DU32{0}]))], O.at(ctx(), 100.0, 50.0), with_entry(ola(3, 3), True{}))), "i150,i210,i10,i20,.") && same(outs(task(tcall("GetRangeExtents", W.seq([W.DI32{4}, W.DI32{9}, W.DU32{1}])))), "i70,i160,i50,i20,."), "text: character and range extents, in window and screen coordinates"},
+    Check{same(outs(task(tcall("GetOffsetAtPoint", W.seq([W.DI32{74}, W.DI32{165}, W.DU32{1}])))), "i4,.") && same(outs(task(tcall("GetOffsetAtPoint", W.seq([W.DI32{74}, W.DI32{300}, W.DU32{1}])))), "i4294967295,.") && same(outs(task(tcall("GetCharacterAtOffset", W.seq([W.DI32{2}])))), "i225,."), "text: offset at a point (nearest stop, -1 outside) and the character at an offset"},
+    Check{same(outs(serve1(tcall("GetNSelections", W.DEnd{}), with_entry(ola(9, 4), True{}))), "i1,.") && same(outs(serve1(tcall("GetSelection", W.seq([W.DI32{0}])), with_entry(ola(4, 9), True{}))), "i4,i9,.") && same(outs(task(tcall("GetNSelections", W.DEnd{}))), "i0,.") && same(outs(task(tcall("GetSelection", W.seq([W.DI32{0}])))), "i0,i0,."), "text: one selection, in order, or none"},
+    Check{same(reply_sig(task(tcall("GetAttributeRun", W.seq([W.DI32{2}, W.DBool{True{}}])))), "a{ss}ii") && same(reply_sig(task(tcall("GetAttributes", W.seq([W.DI32{2}])))), "a{ss}ii") && same(reply_sig(task(call(node_path(7), acc(), "GetAttributes", W.DEnd{}))), "a{ss}"), "text: Text.GetAttributes is the text's, Accessible.GetAttributes the node's"},
+    Check{U32.is_eq(out_count(task(ecall("InsertText", W.seq([W.DI32{3}, W.DStr{"xyz"}, W.DI32{3}])))), 0) && same(req_text(requests(task(ecall("InsertText", W.seq([W.DI32{3}, W.DStr{"xyz"}, W.DI32{3}]))))), "edit:7:insert:3:xyz#1;") && U32.is_eq(held_count(task(ecall("InsertText", W.seq([W.DI32{3}, W.DStr{"xyz"}, W.DI32{3}])))), 1), "text: InsertText is held for the app, with a ticket, and not answered yet"},
+    Check{same(answer_of(task(ecall("InsertText", W.seq([W.DI32{3}, W.DStr{"xyz"}, W.DI32{3}]))), True{}), "2/0/0/10/////:1.9//b|bTrue,.;") && same(answer_of(task(ecall("InsertText", W.seq([W.DI32{3}, W.DStr{"€"}, W.DI32{3}]))), False{}), "2/0/0/10/////:1.9//b|bFalse,.;") && same(answer_of(task(ecall("CopyText", W.seq([W.DI32{0}, W.DI32{3}]))), True{}), "2/0/0/10/////:1.9//|.;"), "text: a settled call is answered with its verdict; CopyText with nothing"},
+    Check{same(full_text(W.decode(golden_insert_call())), "1/0/12/0//org/a11y/atspi/accessible/7/org.a11y.atspi.EditableText/InsertText//:1.42/:1.9/isi|i3,s'€',i3,.") && same(req_text(requests(task(decoded(W.decode(golden_insert_call()))))), "edit:7:insert:3:€#1;") && same(outs(task(decoded(W.decode(golden_string_call())))), "s'mundo',i4,i9,."), "text: GLib's InsertText and GetStringAtOffset calls decode and are served"},
+    Check{same(req_text(requests(S.serve([ecall("InsertText", W.seq([W.DI32{(0 - 1 : U32)}, W.DStr{"!"}, W.DI32{1}])), ecall("DeleteText", W.seq([W.DI32{9}, W.DI32{4}])), ecall("CutText", W.seq([W.DI32{0}, W.DI32{3}])), ecall("PasteText", W.seq([W.DI32{50}])), ecall("SetTextContents", W.seq([W.DStr{"novo"}]))], ctx(), with_entry(ola(3, 3), True{})))), "edit:7:insert:9:!#1;edit:7:delete:4-9#2;edit:7:cut:0-3#3;edit:7:paste:9#4;edit:7:contents:novo#5;"), "text: offsets are clamped and ordered; tickets count up"},
+    Check{same(req_text(requests(S.serve([tcall("SetCaretOffset", W.seq([W.DI32{5}])), tcall("SetSelection", W.seq([W.DI32{0}, W.DI32{6}, W.DI32{2}])), tcall("AddSelection", W.seq([W.DI32{1}, W.DI32{2}]))], ctx(), with_entry(ola(3, 3), True{})))), "edit:7:caret:5#1;edit:7:select:6-2#2;edit:7:select:1-2#3;") && same(outs(task(tcall("SetSelection", W.seq([W.DI32{1}, W.DI32{0}, W.DI32{2}])))), "bFalse,.") && same(req_text(requests(serve1(tcall("RemoveSelection", W.seq([W.DI32{0}])), with_entry(ola(9, 4), True{})))), "edit:7:select:9-9#1;"), "text: caret and selection requests; only selection 0 exists"},
+    Check{same(outs(serve1(ecall("InsertText", W.seq([W.DI32{0}, W.DStr{"x"}, W.DI32{1}])), with_entry(ola(3, 3), False{}))), "bFalse,.") && same(req_text(requests(serve1(ecall("InsertText", W.seq([W.DI32{0}, W.DStr{"x"}, W.DI32{1}])), with_entry(ola(3, 3), False{})))), ""), "text: a disabled entry refuses edits at once"},
+    Check{bytes_eq(signal_bytes(D.TextInserted{7, 3, 3, "xyz"}), golden_text_changed_body()) && bytes_eq(signal_bytes(D.CaretMoved{7, 6}), golden_caret_body()), "text: text-changed and caret-moved signal bodies equal GLib's bytes"},
+    Check{bytes_eq(reply_bytes(task(tcall("GetCharacterExtents", W.seq([W.DI32{2}, W.DU32{1}])))), golden_extents_body()) && bytes_eq(reply_bytes(task(tcall("GetStringAtOffset", W.seq([W.DI32{5}, W.DU32{1}])))), golden_string_body()), "text: GetCharacterExtents (iiii) and GetStringAtOffset (sii) replies equal GLib's bytes"},
+    Check{same(member_of(signal_of(D.TextRemoved{7, 0, 2, "ol"})), "org.a11y.atspi.Event.Object.TextChanged@/org/a11y/atspi/accessible/7:siiva{sv}") && same(vtext(body_of(signal_of(D.TextRemoved{7, 0, 2, "ol"}))), "s'delete',i0,i2,v<s'ol'>,a{sv}[.],.") && same(member_of(signal_of(D.SelectionChanged{7})), "org.a11y.atspi.Event.Object.TextSelectionChanged@/org/a11y/atspi/accessible/7:siiva{sv}") && same(member_of(signal_of(D.CaretMoved{7, 1})), "org.a11y.atspi.Event.Object.TextCaretMoved@/org/a11y/atspi/accessible/7:siiva{sv}"), "text: delete, caret and selection signals"},
+    Check{same(entry_diff(ola(3, 3), ttext("olá, mundo", 4, 4, tstops(10n))), "text+:7:3:1:,|caret:7:4") && same(entry_diff(ola(9, 9), ttext("olá gente", 9, 9, tstops(9n))), "text-:7:4:5:mundo|text+:7:4:5:gente") && same(entry_diff(ttext("aaa", 3, 3, tstops(3n)), ttext("aaaa", 4, 4, tstops(4n))), "text+:7:3:1:a|caret:7:4"), "diff: text changes are one replacement with the common prefix and suffix kept"},
+    Check{same(entry_diff(ola(3, 3), ola(5, 5)), "caret:7:5") && same(entry_diff(ola(3, 3), ola(9, 4)), "caret:7:9|selection:7") && same(entry_diff(ola(9, 4), ola(9, 9)), "selection:7") && same(entry_diff(ola(3, 3), ola(3, 3)), ""), "diff: caret moves and selection changes"},
+    Check{Bool.not(accepted(AK.route(fstate(True{}), M.EditText{7, M.SetCaret{0}, 1}))) && AK.editable(fstate(True{}), 7) && Bool.not(AK.editable(fstate(False{}), 7)) && Bool.not(AK.editable(fstate(True{}), 2)), "kairo: text requests are left to the field; only an enabled field is editable"},
+    Check{same(node_text(M.lookup(fbuilt(fstate(True{}), ola(3, 3)), 7)), "7<100:entry:Nome::0") && M.has_state(node_states(fbuilt(fstate(True{}), ola(3, 3)), 7), M.Editable{}) && M.has_state(node_states(fbuilt(fstate(True{}), ola(3, 3)), 7), M.SingleLine{}) && M.has_state(node_states(fbuilt(fstate(True{}), ola(3, 3)), 7), M.Focused{}) && same(attrs_of(M.lookup(fbuilt(fstate(True{}), ola(3, 3)), 7)), "placeholder-text=Seu nome;") && same(checked(fbuilt(fstate(True{}), ola(3, 3))), "ok"), "kairo: an EditRole node is an editable, single-line entry with its text and placeholder"}
+  ]
+
+# With a real font: requests through Mokko's field and Kairo's editing.
+
+def fbounds() -> G.Rect:
+  G.Rect{20.0, 160.0, 240.0, 44.0}
+
+def blank() -> MF.Field:
+  MF.Field{KE.empty(), Nil{}, Mk.Metrics{0.0, 0.0, 0.0}, 0.0, None{}}
+
+def field_or(r: Result<&2, &2, String, MF.Field>) -> MF.Field:
+  match r:
+    case Fail{e}:
+      blank()
+    case Done{f}:
+      f
+
+def ffield(+font: F.Font, text: String) -> MF.Field:
+  field_or(MF.field(font, 16.0, text))
+
+def fview_content(r: Result<&2, &2, String, MF.FieldView>) -> List<&2, AK.Content>:
+  match r:
+    case Fail{e}:
+      Nil{}
+    case Done{MF.FieldView{v, e}}:
+      [AF.content(e)]
+
+# The app's tree for a field: Mokko's view gives the EditState.
+def ftree(+s: KT.State, f: MF.Field) -> M.Tree:
+  AK.build.with("app", AK.Surface{100, "Janela", 480.0, 320.0, True{}}, semantics(s), notes(),
+    fview_content(MF.view(kfield(True{}), s, f, 16.0, MF.field_theme(), "Seu nome")))
+
+def aedit(+font: F.Font, +s: KT.State, f: MF.Field, r: M.Request) -> AF.Edited:
+  AF.edit(font, 16.0, fbounds(), s, 7, f, r)
+
+def edited_field(e: AF.Edited) -> MF.Field:
+  AF.Edited{MF.Fed{f, d, r}, ok} = e
+  f
+
+def edited_ok(e: AF.Edited) -> Bool:
+  AF.Edited{fed, ok} = e
+  ok
+
+def request_text(r: KE.Request) -> String:
+  match r:
+    case KE.NoRequest{}:
+      "none"
+    case KE.CopyText{t}:
+      "copy:" ++ t
+    case KE.PasteText{}:
+      "paste"
+
+def edited_request(e: AF.Edited) -> String:
+  AF.Edited{MF.Fed{f, d, r}, ok} = e
+  request_text(r)
+
+def message_text(m: Maybe<&2, String>) -> String:
+  match m:
+    case None{}:
+      ""
+    case Some{t}:
+      t
+
+# One edit on "olá" (caret at the end): the outcome, the text, the
+# request, the message and the diff the app would publish.
+def edit_report(+font: F.Font, e: AF.Edited) -> String:
+  +x = e
+  +f = edited_field(x)
+  Bool.show(edited_ok(x)) ++ "|" ++ MF.text_of(f) ++ "|" ++ edited_request(x) ++ "|" ++ message_text(MF.message(f)) ++ "|" ++
+    diffs(ftree(fstate(True{}), ffield(font, "olá")), ftree(fstate(True{}), f))
+
+def on_ola(+font: F.Font, op: M.TextOp) -> String:
+  edit_report(font, aedit(font, fstate(True{}), ffield(font, "olá"), M.EditText{7, op, 1}))
+
+def head_text(v: W.Value) -> String:
+  match v:
+    case W.DSeq{x, rest}:
+      vtext(x)
+    case _:
+      "?"
+
+def x_of(s: S.Served) -> String:
+  head_text(body_of(first_out(s)))
+
+def checks.field(+font: F.Font) -> List<&2, Check>:
+  [
+    Check{same(checked(ftree(fstate(True{}), ffield(font, "olá"))), "ok") && same(outs(serve1(tcall("GetText", W.seq([W.DI32{0}, W.DI32{(0 - 1 : U32)}])), ftree(fstate(True{}), ffield(font, "olá")))), "s'olá',.") && same(x_of(serve1(tcall("GetCharacterExtents", W.seq([W.DI32{0}, W.DU32{1}])), ftree(fstate(True{}), ffield(font, "olá")))), "i32"), "field: Mokko's EditState becomes the entry's text, from the text area's left edge"},
+    Check{same(req_text(requests(serve1(decoded(W.decode(golden_insert_call())), ftree(fstate(True{}), ffield(font, "olá"))))), "edit:7:insert:3:€#1;") && same(on_ola(font, M.Insert{3, "€"}), "False|olá|none|Character U+20AC cannot be displayed|"), "field: GLib's InsertText of U+20AC is refused by the layout and changes nothing"},
+    Check{same(on_ola(font, M.Insert{3, "zinho"}), "True|olázinho|none||text+:7:3:5:zinho|caret:7:8") && same(on_ola(font, M.Insert{0, "Ah, "}), "True|Ah, olá|none||text+:7:0:4:Ah, |caret:7:4"), "field: InsertText goes through Mokko's feed and is announced"},
+    Check{same(on_ola(font, M.Delete{0, 2}), "True|á|none||text-:7:0:2:ol|caret:7:0") && same(on_ola(font, M.SetContents{"novo"}), "True|novo|none||text-:7:0:3:olá|text+:7:0:4:novo|caret:7:4") && same(on_ola(font, M.SetContents{""}), "True||none||text-:7:0:3:olá|caret:7:0"), "field: DeleteText and SetTextContents"},
+    Check{same(on_ola(font, M.Insert{1, "\n"}), "False|olá|none|Line breaks are not allowed in this field|") && same(on_ola(font, M.Insert{1, "☕"}), "False|olá|none|Character U+2615 cannot be displayed|"), "field: Kairo's and Syllo's refusals apply to assistive technologies"},
+    Check{same(on_ola(font, M.Cut{0, 2}), "True|á|copy:ol||text-:7:0:2:ol|caret:7:0") && same(on_ola(font, M.Copy{1, 3}), "True|olá|copy:lá||") && same(on_ola(font, M.Paste{1}), "True|olá|paste||caret:7:1"), "field: CutText, CopyText and PasteText ask the app for the clipboard"},
+    Check{same(on_ola(font, M.SetCaret{1}), "True|olá|none||caret:7:1") && same(on_ola(font, M.Select{0, 2}), "True|olá|none||caret:7:2|selection:7"), "field: caret and selection requests move the field's caret"},
+    Check{Bool.not(edited_ok(aedit(font, fstate(False{}), ffield(font, "olá"), M.EditText{7, M.Insert{0, "x"}, 1}))) && Bool.not(edited_ok(aedit(font, fstate(True{}), ffield(font, "olá"), M.EditText{2, M.Insert{0, "x"}, 1}))) && Bool.not(edited_ok(aedit(font, fstate(True{}), ffield(font, "olá"), M.Activate{7, 0}))), "field: a disabled field, another id and other requests are not performed"}
+  ]
+
 def checks() -> List<&2, Check>:
-  List.concat(&2, Check, [checks.wire(), checks.model(), checks.diff(), checks.serving(), checks.kairo()])
+  List.concat(&2, Check, [checks.wire(), checks.model(), checks.diff(), checks.serving(), checks.kairo(), checks.text()])
 
 def verdict(ok: Bool, +passed: U32, +failed: U32) -> IO(Unit):
   match ok:
@@ -757,5 +1039,17 @@ def report(cs: List<&2, Check>, +passed: U32, +failed: U32) -> IO(Unit):
         IO.print("FAIL: " ++ name)
         report(rest, passed, (failed + 1 : U32))
 
+def font_path() -> String:
+  "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
+
+def with_font(r: Result<&2, &2, String, F.Font>) -> IO(Unit):
+  match r:
+    case Fail{e}:
+      IO.die(Unit, 1, "Auvia: cannot load " ++ font_path() ++ ": " ++ e)
+    case Done{font}:
+      report(List.append(&2, Check, checks(), checks.field(font)), 0, 0)
+
 def main() -> IO(Unit):
-  report(checks(), 0, 0)
+  do IO<Unit>:
+    r : Result<&2, &2, String, F.Font> <- F.load(font_path())
+    with_font(r)

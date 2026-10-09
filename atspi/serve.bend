@@ -2,6 +2,7 @@ import Base
 import ../model.bend as M
 import ../dbus/wire.bend as W
 import ./objects.bend as O
+import ../text.bend as T
 
 # Answers AT-SPI method calls from the published tree. Pure: the replies
 # go back to the bus, and the requests (activate, focus) go to the app,
@@ -42,9 +43,31 @@ type Op is Data:
   Locale{}
   BusAddress{}
   Items{}
+  GetText{}
+  SetCaretOffset{}
+  StringAtOffset{}
+  TextAtOffset{}
+  CharacterAtOffset{}
+  CharacterExtents{}
+  RangeExtents{}
+  OffsetAtPoint{}
+  NSelections{}
+  GetSelection{}
+  AddSelection{}
+  RemoveSelection{}
+  SetSelection{}
+  AttributeRun{}
+  TextAttributes{}
+  DefaultAttributes{}
+  SetTextContents{}
+  InsertText{}
+  DeleteText{}
+  CopyText{}
+  CutText{}
+  PasteText{}
   NoOp{}
 
-def op_of(+m: String) -> Op:
+def base_op(+m: String) -> Op:
   Bool.pick(Op, String.eq(m, "Introspect"), Introspect{},
   Bool.pick(Op, String.eq(m, "Ping"), Ping{},
   Bool.pick(Op, String.eq(m, "Get"), PropGet{},
@@ -79,6 +102,64 @@ def op_of(+m: String) -> Op:
   Bool.pick(Op, String.eq(m, "GetLocale"), Locale{},
   Bool.pick(Op, String.eq(m, "GetApplicationBusAddress"), BusAddress{},
   Bool.pick(Op, String.eq(m, "GetItems"), Items{}, NoOp{}))))))))))))))))))))))))))))))))))
+
+# org.a11y.atspi.Text's members. GetAttributes here is the text's, at an
+# offset (Accessible has its own).
+def text_op(+m: String) -> Op:
+  Bool.pick(Op, String.eq(m, "GetText"), GetText{},
+  Bool.pick(Op, String.eq(m, "SetCaretOffset"), SetCaretOffset{},
+  Bool.pick(Op, String.eq(m, "GetStringAtOffset"), StringAtOffset{},
+  Bool.pick(Op, String.eq(m, "GetTextAtOffset"), TextAtOffset{},
+  Bool.pick(Op, String.eq(m, "GetCharacterAtOffset"), CharacterAtOffset{},
+  Bool.pick(Op, String.eq(m, "GetCharacterExtents"), CharacterExtents{},
+  Bool.pick(Op, String.eq(m, "GetRangeExtents"), RangeExtents{},
+  Bool.pick(Op, String.eq(m, "GetOffsetAtPoint"), OffsetAtPoint{},
+  Bool.pick(Op, String.eq(m, "GetNSelections"), NSelections{},
+  Bool.pick(Op, String.eq(m, "GetSelection"), GetSelection{},
+  Bool.pick(Op, String.eq(m, "AddSelection"), AddSelection{},
+  Bool.pick(Op, String.eq(m, "RemoveSelection"), RemoveSelection{},
+  Bool.pick(Op, String.eq(m, "SetSelection"), SetSelection{},
+  Bool.pick(Op, String.eq(m, "GetAttributeRun"), AttributeRun{},
+  Bool.pick(Op, String.eq(m, "GetAttributes"), TextAttributes{},
+  Bool.pick(Op, String.eq(m, "GetDefaultAttributes"), DefaultAttributes{},
+  Bool.pick(Op, String.eq(m, "GetDefaultAttributeSet"), DefaultAttributes{}, NoOp{})))))))))))))))))
+
+def edit_op(+m: String) -> Op:
+  Bool.pick(Op, String.eq(m, "SetTextContents"), SetTextContents{},
+  Bool.pick(Op, String.eq(m, "InsertText"), InsertText{},
+  Bool.pick(Op, String.eq(m, "DeleteText"), DeleteText{},
+  Bool.pick(Op, String.eq(m, "CopyText"), CopyText{},
+  Bool.pick(Op, String.eq(m, "CutText"), CutText{},
+  Bool.pick(Op, String.eq(m, "PasteText"), PasteText{}, NoOp{}))))))
+
+def or_edit(op: Op, +m: String) -> Op:
+  match op:
+    case NoOp{}:
+      edit_op(m)
+    case other:
+      other
+
+def or_text(op: Op, +m: String) -> Op:
+  match op:
+    case NoOp{}:
+      or_edit(text_op(m), m)
+    case other:
+      other
+
+def op_in(text: Bool, edit: Bool, +m: String) -> Op:
+  match text edit:
+    case True{} _:
+      text_op(m)
+    case False{} True{}:
+      edit_op(m)
+    case False{} False{}:
+      or_text(base_op(m), m)
+
+# The operation a call names. The interface picks between members of the
+# same name (Accessible.GetAttributes and Text.GetAttributes); a call with
+# no interface gets the first interface that has the member.
+def op_of(+iface: String, +m: String) -> Op:
+  op_in(String.eq(iface, O.i_text()), String.eq(iface, O.i_editable()), m)
 
 def op_iface(op: Op) -> String:
   match op:
@@ -128,6 +209,50 @@ def op_iface(op: Op) -> String:
       O.i_application()
     case Items{}:
       O.i_cache()
+    case GetText{}:
+      O.i_text()
+    case SetCaretOffset{}:
+      O.i_text()
+    case StringAtOffset{}:
+      O.i_text()
+    case TextAtOffset{}:
+      O.i_text()
+    case CharacterAtOffset{}:
+      O.i_text()
+    case CharacterExtents{}:
+      O.i_text()
+    case RangeExtents{}:
+      O.i_text()
+    case OffsetAtPoint{}:
+      O.i_text()
+    case NSelections{}:
+      O.i_text()
+    case GetSelection{}:
+      O.i_text()
+    case AddSelection{}:
+      O.i_text()
+    case RemoveSelection{}:
+      O.i_text()
+    case SetSelection{}:
+      O.i_text()
+    case AttributeRun{}:
+      O.i_text()
+    case TextAttributes{}:
+      O.i_text()
+    case DefaultAttributes{}:
+      O.i_text()
+    case SetTextContents{}:
+      O.i_editable()
+    case InsertText{}:
+      O.i_editable()
+    case DeleteText{}:
+      O.i_editable()
+    case CopyText{}:
+      O.i_editable()
+    case CutText{}:
+      O.i_editable()
+    case PasteText{}:
+      O.i_editable()
     case NoOp{}:
       ""
     case _:
@@ -140,6 +265,7 @@ type Reply is Data:
   Ok{body: W.Value}
   Err{name: String, text: String}
   Act{body: W.Value, request: M.Request}
+  Defer{request: M.Request}
   SetId{id: U32}
 
 def unknown_method() -> Reply:
@@ -166,6 +292,13 @@ def range_props(m: Maybe<&2, M.Range>) -> List<&2, Prop>:
         Prop{O.i_value(), "MinimumIncrement", W.f64(st)}, Prop{O.i_value(), "CurrentValue", W.f64(c)},
         Prop{O.i_value(), "Text", W.DStr{""}}]
 
+def text_props(m: Maybe<&2, M.Text>) -> List<&2, Prop>:
+  match m:
+    case None{}:
+      Nil{}
+    case Some{M.Text{c, n, ca, an, ox, oy, lh, st}}:
+      [Prop{O.i_text(), "CharacterCount", W.DI32{n}}, Prop{O.i_text(), "CaretOffset", W.DI32{ca}}]
+
 def app_props(+ctx: O.Ctx, root: Bool) -> List<&2, List<&2, Prop>>:
   O.Ctx{bus, id, l, x, y} = ctx
   O.when(List<&2, Prop>, root, [Prop{O.i_application(), "ToolkitName", W.DStr{"Auvia"}},
@@ -175,7 +308,7 @@ def app_props(+ctx: O.Ctx, root: Bool) -> List<&2, List<&2, Prop>>:
 
 def table(+ctx: O.Ctx, +ix: M.Index, +n: M.Node) -> List<&2, Prop>:
   O.Ctx{bus, app, +locale, x, y} = ctx
-  M.Node{+id, p, r, nm, d, s, +a, rl, at, b, v, c} = n
+  M.Node{+id, p, r, nm, d, s, +a, rl, at, b, v, tx, c} = n
   List.concat(&2, Prop, [
     [Prop{O.i_accessible(), "Name", W.DStr{nm}}, Prop{O.i_accessible(), "Description", W.DStr{d}},
       Prop{O.i_accessible(), "Parent", O.parent_ref(ctx, n)}, Prop{O.i_accessible(), "ChildCount", W.DI32{M.count(c)}},
@@ -183,7 +316,7 @@ def table(+ctx: O.Ctx, +ix: M.Index, +n: M.Node) -> List<&2, Prop>:
       Prop{O.i_accessible(), "HelpText", W.DStr{""}}],
     List.concat(&2, Prop, app_props(ctx, U32.is_eq(id, 0))),
     O.when(Prop, O.has_actions(a), Prop{O.i_action(), "NActions", W.DI32{U32.from_nat(List.length(&2, M.Action, a))}}),
-    range_props(v)])
+    range_props(v), text_props(tx)])
 
 def prop_find(ps: List<&2, Prop>, +iface: String, +name: String) -> Reply:
   match ps:
@@ -284,6 +417,155 @@ def grab_focus(+n: M.Node) -> Reply:
 def layer(r: M.Role) -> U32:
   Bool.pick(U32, M.same_role(r, M.Frame{}), 7, 3)
 
+# Text
+# ----
+
+def the_text(m: Maybe<&2, M.Text>) -> M.Text:
+  match m:
+    case None{}:
+      M.Text{"", 0, 0, 0, 0.0, 0.0, 0.0, Nil{}}
+    case Some{t}:
+      t
+
+def text_of(n: M.Node) -> M.Text:
+  the_text(M.node_text(n))
+
+def count_of(n: M.Node) -> U32:
+  T.text_count(text_of(n))
+
+def int_arg(+body: W.Value, k: Nat) -> U32:
+  W.word(W.arg(body, k))
+
+def get_text(t: M.Text, +a: U32, +b: U32) -> Reply:
+  M.Text{c, +n, ca, an, ox, oy, lh, st} = t
+  one(W.DStr{T.slice(c, T.clamp_start(a, n), T.clamp_end(b, n))})
+
+def piece_reply(p: T.Piece) -> Reply:
+  T.Piece{s, a, b} = p
+  Ok{W.seq([W.DStr{s}, W.DI32{a}, W.DI32{b}])}
+
+def four(b: M.Box) -> Reply:
+  M.Box{x, y, w, h} = b
+  Ok{W.seq([W.DI32{O.to_i32(x)}, W.DI32{O.to_i32(y)}, W.DI32{O.to_i32(w)}, W.DI32{O.to_i32(h)}])}
+
+# A box of the text in coord_type's coordinates, as Component answers.
+def text_extents(+ctx: O.Ctx, +ix: M.Index, +n: M.Node, coord: U32, b: M.Box) -> Reply:
+  four(O.moved(b, O.offset(ctx, coord, O.parent_box(ix, n))))
+
+def point_offset(t: M.Text, pt: O.Offset) -> Reply:
+  O.Offset{+x, +y} = pt
+  one(W.DI32{T.offset_at(t, x, y)})
+
+def pair_reply(p: U32 & U32, +ok: Bool) -> Reply:
+  (a, b) = p
+  Ok{W.seq([W.DI32{Bool.pick(U32, ok, a, 0)}, W.DI32{Bool.pick(U32, ok, b, 0)}])}
+
+# The single selection, or (0, 0) when there is none or the number is not 0.
+def selection_reply(+t: M.Text, +k: U32) -> Reply:
+  pair_reply(T.selection(t), U32.is_eq(k, 0) && T.has_selection(t))
+
+def attribute_run(+n: U32) -> Reply:
+  Ok{W.seq([W.array("{ss}", Nil{}), W.DI32{0}, W.DI32{n}])}
+
+def refused(op: M.TextOp) -> Reply:
+  match op:
+    case M.Copy{a, b}:
+      Ok{W.DEnd{}}
+    case _:
+      one(W.DBool{False{}})
+
+# A text request: held for the app (which performs it through its editing
+# rules and settles it), or refused at once.
+def text_request(ok: Bool, +n: M.Node, op: M.TextOp) -> Reply:
+  match ok:
+    case False{}:
+      refused(op)
+    case True{}:
+      Defer{M.EditText{M.node_id(n), op, 0}}
+
+def can_edit(+n: M.Node) -> Bool:
+  M.is_enabled(n) && M.has_state(M.node_states(n), M.Editable{})
+
+def ordered(+a: U32, +b: U32, +n: U32) -> U32 & U32:
+  +x = T.clamp_start(a, n)
+  +y = T.clamp_end(b, n)
+  (U32.min(x, y), U32.max(x, y))
+
+def delete_op(p: U32 & U32) -> M.TextOp:
+  (a, b) = p
+  M.Delete{a, b}
+
+def copy_op(p: U32 & U32) -> M.TextOp:
+  (a, b) = p
+  M.Copy{a, b}
+
+def cut_op(p: U32 & U32) -> M.TextOp:
+  (a, b) = p
+  M.Cut{a, b}
+
+def range_extents(+ctx: O.Ctx, +ix: M.Index, +n: M.Node, +body: W.Value) -> Reply:
+  +c = count_of(n)
+  text_extents(ctx, ix, n, int_arg(body, 2n), T.range_box(text_of(n), T.clamp_start(int_arg(body, 0n), c), T.clamp_end(int_arg(body, 1n), c)))
+
+def select_op(+n: M.Node, +a: U32, +b: U32) -> M.TextOp:
+  +c = count_of(n)
+  M.Select{T.clamp_start(a, c), T.clamp_end(b, c)}
+
+def collapse_op(t: M.Text) -> M.TextOp:
+  +c = T.text_caret(t)
+  M.Select{c, c}
+
+# Answers a Text or EditableText call on a node that has a text (the
+# interface check guarantees it).
+def on_text(op: Op, +ctx: O.Ctx, +ix: M.Index, +n: M.Node, +body: W.Value) -> Reply:
+  match op:
+    case GetText{}:
+      get_text(text_of(n), int_arg(body, 0n), int_arg(body, 1n))
+    case SetCaretOffset{}:
+      text_request(M.is_enabled(n), n, M.SetCaret{T.clamp_end(int_arg(body, 0n), count_of(n))})
+    case StringAtOffset{}:
+      piece_reply(T.string_at(text_of(n), T.clamp_end(int_arg(body, 0n), count_of(n)), int_arg(body, 1n)))
+    case TextAtOffset{}:
+      piece_reply(T.string_at(text_of(n), T.clamp_end(int_arg(body, 0n), count_of(n)), T.boundary_granularity(int_arg(body, 1n))))
+    case CharacterAtOffset{}:
+      one(W.DI32{T.scalar_at(text_of(n), int_arg(body, 0n))})
+    case CharacterExtents{}:
+      text_extents(ctx, ix, n, int_arg(body, 1n), T.char_box(text_of(n), T.clamp_end(int_arg(body, 0n), count_of(n))))
+    case RangeExtents{}:
+      range_extents(ctx, ix, n, body)
+    case OffsetAtPoint{}:
+      point_offset(text_of(n), window_point(ctx, ix, n, body))
+    case NSelections{}:
+      one(W.DI32{Bool.to_u32(T.has_selection(text_of(n)))})
+    case GetSelection{}:
+      selection_reply(text_of(n), int_arg(body, 0n))
+    case AddSelection{}:
+      text_request(M.is_enabled(n) && Bool.not(T.has_selection(text_of(n))), n, select_op(n, int_arg(body, 0n), int_arg(body, 1n)))
+    case RemoveSelection{}:
+      text_request(M.is_enabled(n) && U32.is_eq(int_arg(body, 0n), 0) && T.has_selection(text_of(n)), n, collapse_op(text_of(n)))
+    case SetSelection{}:
+      text_request(M.is_enabled(n) && U32.is_eq(int_arg(body, 0n), 0), n, select_op(n, int_arg(body, 1n), int_arg(body, 2n)))
+    case AttributeRun{}:
+      attribute_run(count_of(n))
+    case TextAttributes{}:
+      attribute_run(count_of(n))
+    case DefaultAttributes{}:
+      one(W.array("{ss}", Nil{}))
+    case SetTextContents{}:
+      text_request(can_edit(n), n, M.SetContents{W.text(W.arg(body, 0n))})
+    case InsertText{}:
+      text_request(can_edit(n), n, M.Insert{T.clamp_end(int_arg(body, 0n), count_of(n)), W.text(W.arg(body, 1n))})
+    case DeleteText{}:
+      text_request(can_edit(n), n, delete_op(ordered(int_arg(body, 0n), int_arg(body, 1n), count_of(n))))
+    case CopyText{}:
+      text_request(M.is_enabled(n), n, copy_op(ordered(int_arg(body, 0n), int_arg(body, 1n), count_of(n))))
+    case CutText{}:
+      text_request(can_edit(n), n, cut_op(ordered(int_arg(body, 0n), int_arg(body, 1n), count_of(n))))
+    case PasteText{}:
+      text_request(can_edit(n), n, M.Paste{T.clamp_end(int_arg(body, 0n), count_of(n))})
+    case _:
+      unknown_method()
+
 # Introspection
 # -------------
 
@@ -302,6 +584,12 @@ def x_action() -> String:
 def x_value() -> String:
   "<interface name='org.a11y.atspi.Value'><property name='MinimumValue' type='d' access='read'/><property name='MaximumValue' type='d' access='read'/><property name='MinimumIncrement' type='d' access='read'/><property name='CurrentValue' type='d' access='read'/><property name='Text' type='s' access='read'/></interface>"
 
+def x_text() -> String:
+  "<interface name='org.a11y.atspi.Text'><property name='CharacterCount' type='i' access='read'/><property name='CaretOffset' type='i' access='read'/><method name='GetStringAtOffset'><arg direction='in' name='offset' type='i'/><arg direction='in' name='granularity' type='u'/><arg direction='out' type='s'/><arg direction='out' type='i'/><arg direction='out' type='i'/></method><method name='GetText'><arg direction='in' name='startOffset' type='i'/><arg direction='in' name='endOffset' type='i'/><arg direction='out' type='s'/></method><method name='SetCaretOffset'><arg direction='in' name='offset' type='i'/><arg direction='out' type='b'/></method><method name='GetTextAtOffset'><arg direction='in' name='offset' type='i'/><arg direction='in' name='type' type='u'/><arg direction='out' type='s'/><arg direction='out' type='i'/><arg direction='out' type='i'/></method><method name='GetCharacterAtOffset'><arg direction='in' name='offset' type='i'/><arg direction='out' type='i'/></method><method name='GetAttributes'><arg direction='in' name='offset' type='i'/><arg direction='out' type='a{ss}'/><arg direction='out' type='i'/><arg direction='out' type='i'/></method><method name='GetDefaultAttributes'><arg direction='out' type='a{ss}'/></method><method name='GetCharacterExtents'><arg direction='in' name='offset' type='i'/><arg direction='in' name='coordType' type='u'/><arg direction='out' type='i'/><arg direction='out' type='i'/><arg direction='out' type='i'/><arg direction='out' type='i'/></method><method name='GetOffsetAtPoint'><arg direction='in' name='x' type='i'/><arg direction='in' name='y' type='i'/><arg direction='in' name='coordType' type='u'/><arg direction='out' type='i'/></method><method name='GetNSelections'><arg direction='out' type='i'/></method><method name='GetSelection'><arg direction='in' name='selectionNum' type='i'/><arg direction='out' type='i'/><arg direction='out' type='i'/></method><method name='AddSelection'><arg direction='in' name='startOffset' type='i'/><arg direction='in' name='endOffset' type='i'/><arg direction='out' type='b'/></method><method name='RemoveSelection'><arg direction='in' name='selectionNum' type='i'/><arg direction='out' type='b'/></method><method name='SetSelection'><arg direction='in' name='selectionNum' type='i'/><arg direction='in' name='startOffset' type='i'/><arg direction='in' name='endOffset' type='i'/><arg direction='out' type='b'/></method><method name='GetRangeExtents'><arg direction='in' name='startOffset' type='i'/><arg direction='in' name='endOffset' type='i'/><arg direction='in' name='coordType' type='u'/><arg direction='out' type='i'/><arg direction='out' type='i'/><arg direction='out' type='i'/><arg direction='out' type='i'/></method><method name='GetAttributeRun'><arg direction='in' name='offset' type='i'/><arg direction='in' name='includeDefaults' type='b'/><arg direction='out' type='a{ss}'/><arg direction='out' type='i'/><arg direction='out' type='i'/></method><method name='GetDefaultAttributeSet'><arg direction='out' type='a{ss}'/></method></interface>"
+
+def x_editable() -> String:
+  "<interface name='org.a11y.atspi.EditableText'><method name='SetTextContents'><arg direction='in' name='newContents' type='s'/><arg direction='out' type='b'/></method><method name='InsertText'><arg direction='in' name='position' type='i'/><arg direction='in' name='text' type='s'/><arg direction='in' name='length' type='i'/><arg direction='out' type='b'/></method><method name='CopyText'><arg direction='in' name='startPos' type='i'/><arg direction='in' name='endPos' type='i'/></method><method name='CutText'><arg direction='in' name='startPos' type='i'/><arg direction='in' name='endPos' type='i'/><arg direction='out' type='b'/></method><method name='DeleteText'><arg direction='in' name='startPos' type='i'/><arg direction='in' name='endPos' type='i'/><arg direction='out' type='b'/></method><method name='PasteText'><arg direction='in' name='position' type='i'/><arg direction='out' type='b'/></method></interface>"
+
 def x_cache() -> String:
   "<interface name='org.a11y.atspi.Cache'><method name='GetItems'><arg direction='out' type='a((so)(so)(so)iiassusau)'/></method><signal name='AddAccessible'><arg type='((so)(so)(so)iiassusau)'/></signal><signal name='RemoveAccessible'><arg type='(so)'/></signal></interface>"
 
@@ -313,7 +601,9 @@ def x_iface(+i: String) -> String:
   Bool.pick(String, String.eq(i, O.i_application()), x_application(),
   Bool.pick(String, String.eq(i, O.i_component()), x_component(),
   Bool.pick(String, String.eq(i, O.i_action()), x_action(),
-  Bool.pick(String, String.eq(i, O.i_value()), x_value(), "")))))
+  Bool.pick(String, String.eq(i, O.i_value()), x_value(),
+  Bool.pick(String, String.eq(i, O.i_text()), x_text(),
+  Bool.pick(String, String.eq(i, O.i_editable()), x_editable(), "")))))))
 
 def x_ifaces(xs: List<&2, String>) -> String:
   match xs:
@@ -358,7 +648,7 @@ def on_node(op: Op, +ctx: O.Ctx, +ix: M.Index, +n: M.Node, +body: W.Value) -> Re
     case IndexInParent{}:
       one(W.DI32{M.position(ix, n)})
     case RelationSet{}:
-      M.Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+      M.Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
       one(O.relations_value(ctx, rl))
     case GetRole{}:
       one(W.DU32{M.role_code(M.node_role(n))})
@@ -369,7 +659,7 @@ def on_node(op: Op, +ctx: O.Ctx, +ix: M.Index, +n: M.Node, +body: W.Value) -> Re
     case GetState{}:
       one(O.node_states_value(n))
     case Attributes{}:
-      M.Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+      M.Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
       one(O.attrs_value(at))
     case GetApplication{}:
       one(O.node_ref(ctx, 0))
@@ -414,6 +704,8 @@ def on_node(op: Op, +ctx: O.Ctx, +ix: M.Index, +n: M.Node, +body: W.Value) -> Re
       unknown_method()
     case NoOp{}:
       unknown_method()
+    case other:
+      on_text(other, ctx, ix, n, body)
 
 def on_cache(op: Op, +ctx: O.Ctx, +ix: M.Index) -> Reply:
   match op:
@@ -479,8 +771,15 @@ def dispatch(+op: Op, +iface: String, t: Target, +ctx: O.Ctx, +ix: M.Index, +bod
 # Serving
 # -------
 
+# A text call the app must perform before it is answered: the ticket its
+# request carries, the call to answer, and whether the answer has no body
+# (CopyText returns nothing).
+type Held is Data:
+  Held{ticket: U32, call: W.Message, silent: Bool}
+
+# next: the ticket the next held call gets.
 type Served is Data:
-  Served{ctx: O.Ctx, out: List<&2, W.Message>, requests: List<&2, M.Request>}
+  Served{ctx: O.Ctx, out: List<&2, W.Message>, requests: List<&2, M.Request>, held: List<&2, Held>, next: U32}
 
 def set_app(ctx: O.Ctx, id: U32) -> O.Ctx:
   O.Ctx{bus, old, l, x, y} = ctx
@@ -500,64 +799,92 @@ def flags_of(m: W.Message) -> U32:
   W.Message{k, flags, s, r, p, i, mem, e, d, sn, b} = m
   flags
 
-def finish.go(reply: Reply, +send: Bool, +call: W.Message, ctx: O.Ctx) -> Served:
+def ticketed(r: M.Request, +ticket: U32) -> M.Request:
+  match r:
+    case M.EditText{id, op, t}:
+      M.EditText{id, op, ticket}
+    case other:
+      other
+
+def silent(r: M.Request) -> Bool:
+  match r:
+    case M.EditText{id, M.Copy{a, b}, t}:
+      True{}
+    case _:
+      False{}
+
+# The answer to a held call once the app has performed it (ok) or refused
+# it: a boolean, or an empty return for CopyText; nothing when the caller
+# asked for no reply.
+def verdict(h: Held, ok: Bool) -> List<&2, W.Message>:
+  Held{t, +call, quiet} = h
+  out_if(wants_reply(flags_of(call)), W.method_return(call, Bool.pick(W.Value, quiet, W.DEnd{}, W.seq([W.DBool{ok}]))))
+
+def finish.go(reply: Reply, +send: Bool, +call: W.Message, ctx: O.Ctx, +next: U32) -> Served:
   match reply:
     case Ok{body}:
-      Served{ctx, out_if(send, W.method_return(call, body)), Nil{}}
+      Served{ctx, out_if(send, W.method_return(call, body)), Nil{}, Nil{}, next}
     case Err{name, text}:
-      Served{ctx, out_if(send, W.error_reply(call, name, text)), Nil{}}
+      Served{ctx, out_if(send, W.error_reply(call, name, text)), Nil{}, Nil{}, next}
     case Act{body, req}:
-      Served{ctx, out_if(send, W.method_return(call, body)), [req]}
+      Served{ctx, out_if(send, W.method_return(call, body)), [req], Nil{}, next}
+    case Defer{+req}:
+      Served{ctx, Nil{}, [ticketed(req, next)], [Held{next, call, silent(req)}], (next + 1 : U32)}
     case SetId{id}:
-      Served{set_app(ctx, id), out_if(send, W.method_return(call, W.DEnd{})), Nil{}}
+      Served{set_app(ctx, id), out_if(send, W.method_return(call, W.DEnd{})), Nil{}, Nil{}, next}
 
-def finish(+call: W.Message, reply: Reply, ctx: O.Ctx) -> Served:
-  finish.go(reply, wants_reply(flags_of(call)), call, ctx)
+def finish(+call: W.Message, reply: Reply, ctx: O.Ctx, +next: U32) -> Served:
+  finish.go(reply, wants_reply(flags_of(call)), call, ctx, next)
 
-def answer.call(is_call: Bool, +ctx: O.Ctx, +ix: M.Index, +m: W.Message) -> Served:
+def answer.call(is_call: Bool, +ctx: O.Ctx, +ix: M.Index, +next: U32, +m: W.Message) -> Served:
   match is_call:
     case False{}:
-      Served{ctx, Nil{}, Nil{}}
+      Served{ctx, Nil{}, Nil{}, Nil{}, next}
     case True{}:
       W.Message{k, f, s, r, +p, +i, +mem, e, d, sn, +b} = m
-      finish(m, dispatch(op_of(mem), i, target(p, ix), ctx, ix, b), ctx)
+      finish(m, dispatch(op_of(i, mem), i, target(p, ix), ctx, ix, b), ctx, next)
 
 # Answers one message: method calls get a reply (unless they asked for
-# none); returns, errors and signals (the registry's Embed reply, the bus's
-# NameAcquired) need nothing.
-def answer.in(+ctx: O.Ctx, +ix: M.Index, +m: W.Message) -> Served:
+# none) or are held for the app (text requests); returns, errors and
+# signals (the registry's Embed reply, the bus's NameAcquired) need nothing.
+def answer.in(+ctx: O.Ctx, +ix: M.Index, +next: U32, +m: W.Message) -> Served:
   W.Message{k, f, s, r, p, i, mem, e, d, sn, b} = m
-  answer.call(U32.is_eq(k, 1), ctx, ix, m)
+  answer.call(U32.is_eq(k, 1), ctx, ix, next, m)
 
 def ctx_of(s: Served) -> O.Ctx:
-  Served{ctx, out, reqs} = s
+  Served{ctx, out, reqs, held, next} = s
   ctx
 
+def next_of(s: Served) -> U32:
+  Served{ctx, out, reqs, held, next} = s
+  next
+
 def prepend(a: Served, b: Served) -> Served:
-  Served{c1, o1, r1} = a
-  Served{c2, o2, r2} = b
-  Served{c2, List.append(&2, W.Message, o1, o2), List.append(&2, M.Request, r1, r2)}
+  Served{c1, o1, r1, h1, n1} = a
+  Served{c2, o2, r2, h2, n2} = b
+  Served{c2, List.append(&2, W.Message, o1, o2), List.append(&2, M.Request, r1, r2), List.append(&2, Held, h1, h2), n2}
 
 def answer(+ctx: O.Ctx, +ns: List<&2, M.Node>, +m: W.Message) -> Served:
-  answer.in(ctx, M.index(ns), m)
+  answer.in(ctx, M.index(ns), 1, m)
 
-def serve.go(msgs: List<&2, W.Message>, +ctx: O.Ctx, +ix: M.Index) -> Served:
+def serve.go(msgs: List<&2, W.Message>, +ctx: O.Ctx, +ix: M.Index, +next: U32) -> Served:
   match msgs:
     case Nil{}:
-      Served{ctx, Nil{}, Nil{}}
+      Served{ctx, Nil{}, Nil{}, Nil{}, next}
     case Con{m, rest}:
-      +a = answer.in(ctx, ix, m)
-      prepend(a, serve.go(rest, ctx_of(a), ix))
+      +a = answer.in(ctx, ix, next, m)
+      prepend(a, serve.go(rest, ctx_of(a), ix, next_of(a)))
 
-# Answers every message in order against one tree, indexed (see M.index).
-def serve.in(msgs: List<&2, W.Message>, +ctx: O.Ctx, +ix: M.Index) -> Served:
-  serve.go(msgs, ctx, ix)
+# Answers every message in order against one tree, indexed (see M.index);
+# held calls get tickets from `next` on.
+def serve.in(msgs: List<&2, W.Message>, +ctx: O.Ctx, +ix: M.Index, +next: U32) -> Served:
+  serve.go(msgs, ctx, ix, next)
 
 # Answers every message in order against one tree. The tree is indexed
-# only when there is something to answer.
+# only when there is something to answer. Tickets start at 1.
 def serve(msgs: List<&2, W.Message>, +ctx: O.Ctx, +tree: M.Tree) -> Served:
   match msgs:
     case Nil{}:
-      Served{ctx, Nil{}, Nil{}}
+      Served{ctx, Nil{}, Nil{}, Nil{}, 1}
     case Con{m, rest}:
-      serve.go(Con{m, rest}, ctx, M.indexed(tree))
+      serve.go(Con{m, rest}, ctx, M.indexed(tree), 1)

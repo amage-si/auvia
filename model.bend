@@ -21,6 +21,7 @@ type Role is Data:
   Picture{}
   Slider{}
   ProgressBar{}
+  Entry{}
   Unknown{}
 
 def role_code(r: Role) -> U32:
@@ -49,6 +50,8 @@ def role_code(r: Role) -> U32:
       51
     case ProgressBar{}:
       42
+    case Entry{}:
+      79
     case Unknown{}:
       67
 
@@ -79,6 +82,8 @@ def role_name(r: Role) -> String:
       "slider"
     case ProgressBar{}:
       "progress bar"
+    case Entry{}:
+      "entry"
     case Unknown{}:
       "unknown"
 
@@ -279,11 +284,24 @@ type Box is Data:
 type Range is Data:
   Range{current: F32, min: F32, max: F32, step: F32}
 
+# Where a caret may stand in a text, and its x from the text's origin.
+# Stops ascend by index; the last one is the end of the text.
+type Stop is Data:
+  Stop{index: U32, x: F32}
+
+# A node's text (AT-SPI Text): the content, its length and the caret and
+# selection anchor, in Unicode scalars (AT-SPI's character offsets); and
+# where it is drawn: one line from (origin_x, origin_y), line_height tall,
+# each stop at origin_x + x, in window coordinates.
+type Text is Data:
+  Text{content: String, count: U32, caret: U32, anchor: U32,
+    origin_x: F32, origin_y: F32, line_height: F32, stops: List<&2, Stop>}
+
 type Node is Data:
   Node{id: U32, parent: U32, role: Role, name: String, description: String,
     states: List<&2, State>, actions: List<&2, Action>,
     relations: List<&2, Relation>, attributes: List<&2, Attr>, bounds: Box,
-    value: Maybe<&2, Range>, children: List<&2, U32>}
+    value: Maybe<&2, Range>, text: Maybe<&2, Text>, children: List<&2, U32>}
 
 type Tree is Data:
   Tree{nodes: List<&2, Node>}
@@ -293,6 +311,20 @@ type Tree is Data:
 type Request is Data:
   Activate{id: U32, index: U32}
   Focus{id: U32}
+  EditText{id: U32, op: TextOp, ticket: U32}
+
+# A text request, in scalar offsets already clamped to the text. The app
+# performs it through its editing rules and settles the ticket (see
+# service.bend); the client's reply waits for that verdict.
+type TextOp is Data:
+  SetCaret{offset: U32}
+  Select{start: U32, end: U32}
+  SetContents{text: String}
+  Insert{offset: U32, text: String}
+  Delete{start: U32, end: U32}
+  Copy{start: U32, end: U32}
+  Cut{start: U32, end: U32}
+  Paste{offset: U32}
 
 # Builders
 # --------
@@ -302,7 +334,7 @@ def zero_box() -> Box:
 
 # A node with no states, actions, relations, attributes or value.
 def plain(id: U32, parent: U32, role: Role, name: String, bounds: Box, children: List<&2, U32>) -> Node:
-  Node{id, parent, role, name, "", Nil{}, Nil{}, Nil{}, Nil{}, bounds, None{}, children}
+  Node{id, parent, role, name, "", Nil{}, Nil{}, Nil{}, Nil{}, bounds, None{}, None{}, children}
 
 def application(name: String, children: List<&2, U32>) -> Node:
   plain(0, 0, Application{}, name, zero_box(), children)
@@ -311,35 +343,39 @@ def application(name: String, children: List<&2, U32>) -> Node:
 # ------
 
 def node_id(n: Node) -> U32:
-  Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   id
 
 def node_parent(n: Node) -> U32:
-  Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   p
 
 def node_role(n: Node) -> Role:
-  Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   r
 
 def node_name(n: Node) -> String:
-  Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   nm
 
 def node_states(n: Node) -> List<&2, State>:
-  Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   s
 
 def node_actions(n: Node) -> List<&2, Action>:
-  Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   a
 
 def node_bounds(n: Node) -> Box:
-  Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   b
 
+def node_text(n: Node) -> Maybe<&2, Text>:
+  Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
+  tx
+
 def node_children(n: Node) -> List<&2, U32>:
-  Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   c
 
 def nodes(t: Tree) -> List<&2, Node>:
@@ -392,7 +428,7 @@ def children_of(ns: List<&2, Node>, id: U32) -> List<&2, U32>:
   kids_of(find(ns, id))
 
 def index_in_parent(+ns: List<&2, Node>, n: Node) -> U32:
-  Node{+id, p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Node{+id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   Bool.pick(U32, U32.is_eq(id, 0), 0, index_of(children_of(ns, p), id))
 
 # Indexed trees
@@ -492,7 +528,7 @@ def position.of(m: Maybe<&2, Place>, +ix: Index, +p: U32, +id: U32) -> U32:
 # index_in_parent over an index: the place a child was listed at, read
 # from the list only when another parent listed it first.
 def position(+ix: Index, n: Node) -> U32:
-  Node{+id, +p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Node{+id, +p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   Bool.pick(U32, U32.is_eq(id, 0), 0, position.of(place_of(ix, id), ix, p, id))
 
 def in_parent.pick(same: Bool, +ix: Index, +p: U32, +id: U32) -> Bool:
@@ -618,7 +654,7 @@ def links(+ix: Index, ns: List<&2, Node>) -> List<&2, Problem>:
     case Nil{}:
       Nil{}
     case Con{n, rest}:
-      Node{+id, +p, r, nm, d, s, a, rl, at, b, v, kids} = n
+      Node{+id, +p, r, nm, d, s, a, rl, at, b, v, tx, kids} = n
       +tail = List.append(&2, Problem, child_ok(ix, id, kids), links(ix, rest))
       +listed = U32.is_eq(id, 0) || in_parent(ix, p, id)
       +with_parent = Bool.pick(List<&2, Problem>, listed, tail, Con{BadParent{id}, tail})
