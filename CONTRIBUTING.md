@@ -1,6 +1,6 @@
 # Contributing to Auvia
 
-Use Bend 2.0.35 for the current baseline. Read `bend guide` (and `bend guide
+Use Bend 2.0.36 for the current baseline. Read `bend guide` (and `bend guide
 effects` before touching `native/`) and keep project text in English. Library
 logic belongs in Bend; the native bridge only moves bytes on a Unix socket.
 

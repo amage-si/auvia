@@ -302,7 +302,7 @@ def text_props(m: Maybe<&2, M.Text>) -> List<&2, Prop>:
 def app_props(+ctx: O.Ctx, root: Bool) -> List<&2, List<&2, Prop>>:
   O.Ctx{bus, id, l, x, y} = ctx
   O.when(List<&2, Prop>, root, [Prop{O.i_application(), "ToolkitName", W.DStr{"Auvia"}},
-    Prop{O.i_application(), "Version", W.DStr{"0.1.0"}},
+    Prop{O.i_application(), "Version", W.DStr{"0.1.1"}},
     Prop{O.i_application(), "AtspiVersion", W.DStr{"2.1"}},
     Prop{O.i_application(), "Id", W.DI32{id}}])
 

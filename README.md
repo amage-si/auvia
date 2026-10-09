@@ -9,7 +9,7 @@ AT-SPI2 over D-Bus. The whole stack above a Unix socket is Bend: the D-Bus wire
 format, SASL authentication, the AT-SPI object model, diffing and action
 policy. The native bridge is four small effects (about 100 lines of C).
 
-**Status:** first Linux implementation, tested with **Bend 2.0.35** on Arch
+**Status:** first Linux implementation, tested with **Bend 2.0.36** on Arch
 (Hyprland/XWayland, at-spi2-core 2.60, dbus-broker 37). The demo window is
 listed in the AT-SPI desktop, readable and operable by a real AT-SPI client.
 Orca 50.2 reads it: the window title, the button with its role and

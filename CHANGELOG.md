@@ -7,6 +7,25 @@ patch version (0.1.1) only fixes. Auvia is built from source together with its
 sibling AMAGE libraries; the set of versions tested together is listed in
 [eco-build's releases](https://github.com/amage-si/eco-build/tree/main/releases).
 
+## [0.1.1] - 2026-10-09
+
+### Changed
+
+- Build with Bend 2.0.36: the four native effects register as
+  `io_eff(CID(name), run)`, the form 2.0.36 requires (upstream #1281 removed
+  the third `need` argument; an effect that waits parks itself).
+  `Unix.poll_bytes` already parked itself with `io_wait_on` (socket readable
+  or deadline), so waiting is unchanged. Its comments now point to the
+  `try_` twins of Base's `tcp_recv`, since 2.0.36 removed `tcp_poll`. No API
+  change.
+- The frame decoder's internal `Next` constructor `Ready` is now `Whole`:
+  2.0.36's Base declares `Poll`'s `Ready`, and a constructor name may be
+  declared once.
+- The bus link reads `TCP.send_bytes`' 2.0.36 failure, which carries the
+  unsent bytes beside the error; a failed send still closes the link with
+  the error's text.
+- The application's AT-SPI `Version` property reports 0.1.1.
+
 ## [0.1.0] - 2026-10-09
 
 First tagged release, tested with Bend 2.0.35 on Linux (X11/XWayland) as part
@@ -27,4 +46,5 @@ of AMAGE Eco 0.1.0.
 - 121 native checks; the libatspi probe passes against the demo and the
   headless example.
 
+[0.1.1]: https://github.com/amage-si/auvia/releases/tag/v0.1.1
 [0.1.0]: https://github.com/amage-si/auvia/releases/tag/v0.1.0
