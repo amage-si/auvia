@@ -7,7 +7,7 @@ relations, geometry, focus) to assistive technologies, keeps them in sync with
 precise change events, and routes actions back into the app. On Linux it speaks
 AT-SPI2 over D-Bus. The whole stack above a Unix socket is Bend: the D-Bus wire
 format, SASL authentication, the AT-SPI object model, diffing and action
-policy. The native bridge is three small effects (about 100 lines of C).
+policy. The native bridge is four small effects (about 100 lines of C).
 
 **Status:** first Linux implementation, tested with **Bend 2.0.35** on Arch
 (Hyprland/XWayland, at-spi2-core 2.60, dbus-broker 37). The demo window is
@@ -16,7 +16,10 @@ Orca 50.2 reads it: the window title, the button with its role and
 description, and every counter update. A text field (Mokko's) is an
 editable entry with AT-SPI `Text` and `EditableText`: clients read its text,
 caret, selection and extents, and edit it through the same rules as the
-keyboard; Orca speaks its name, role, text and selection. The demo runs in
+keyboard; Orca speaks its name, role, text and selection. The integrated
+AMAGE Eco demo ([Chromi](https://github.com/amage-si/chromi)'s
+`examples/eco`) publishes its button, status line, text field and the
+field's note, and Orca follows it. The demo runs in
 [Ankra](https://github.com/amage-si/ankra)'s native window, which reports
 window focus and position, and presents through
 [Voltra](https://github.com/amage-si/voltra).
@@ -66,10 +69,10 @@ window focus and position, and presents through
 | Level | Evidence |
 | --- | --- |
 | Compiled | Every module, the tests and the four examples build natively with `bend -o`. The checker reports only the expected "relies on foreign code" notice for the native effects. |
-| Native checks | `tests.bend`: **120 checks pass** (wire format against GLib-encoded golden bytes, model validation, diff order, AT-SPI answers, screen extents from the window origin, Kairo routing, one end-to-end pure flow; Text and EditableText answers, text events and their bytes against GLib's, and edits of a real Mokko field with Liberation Sans, refusals included). |
-| Real AT-SPI client | `tools/atspi_probe.py` (libatspi through python `gi`) against the counter on Ankra's native window: **18 checks pass**, including Tab, Space and click sent to the window, AT-SPI `GrabFocus` and `DoAction`. `tools/demo_check.sh` wraps the probe, captures only the window and adds an independent `gdbus` read. Against `examples/headless` with `--field Nome`: **26 checks pass**, 11 of them on the field (text, caret, word, extents, `GrabFocus`, `InsertText` and `DeleteText` performed and announced, a refused `InsertText` of U+20AC returning false with nothing changed, caret and selection). An AT-SPI edit is answered in about 0.05-0.1 s, the headless loop's 50 ms pump. |
+| Native checks | `tests.bend`: **121 checks pass** (wire format against GLib-encoded golden bytes, model validation, diff order, AT-SPI answers, screen extents from the window origin, Kairo routing, one end-to-end pure flow; Text and EditableText answers, text events and their bytes against GLib's, and edits of a real Mokko field with Liberation Sans, refusals included). |
+| Real AT-SPI client | `tools/atspi_probe.py` (libatspi through python `gi`) against the counter on Ankra's native window: **18 checks pass**, including Tab, Space and click sent to the window, AT-SPI `GrabFocus` and `DoAction`. `tools/demo_check.sh` wraps the probe, captures only the window and adds an independent `gdbus` read. Against `examples/headless` with `--field Nome`: **26 checks pass**, 11 of them on the field (text, caret, word, extents, `GrabFocus`, `InsertText` and `DeleteText` performed and announced, a refused `InsertText` of U+2615 returning false with nothing changed, caret and selection). An AT-SPI edit is answered in about 0.05-0.1 s, the headless loop's 50 ms pump. Against the integrated eco demo (`--app amage-eco --button Ativar --label-prefix "Clique no botão\|Ativado" --field "Texto livre" --field-seed olá`): **27 checks pass**, including `SetTextContents`, `InsertText`, `DeleteText` and a refused U+2615 on Mokko's field in the real window; an edit is answered in about 5 ms, since the loop wakes for the bus. |
 | Window focus and position | With synthetic FocusIn/FocusOut sent to the window, the frame gains and loses `active` and `window:activate`/`deactivate` are emitted; after the window manager moved the window to (300, 200), the frame's screen extents were `[300, 200, 480, 320]` and the button's `[479, 284, 122, 44]`. |
-| Screen reader | `tools/orca_check.sh` runs Orca 50.2 with throwaway settings and a silent private speech-dispatcher, and keeps its debug log. Orca said: `'Auvia - contador'` (window title, on start), `'Clique aqui'` `'button.'` `'Soma um ao contador.'` (Tab), `'Cliques: 1'` (Space), `'Cliques: 2'` (Enter). This run predates the move to Ankra's native window and was not repeated. `tools/orca_check.sh field` (the headless example, driven by the probe): on focus Orca said `'Nome'` `'entry'` `'olá.'`, and for the selection `'und'` `'selected'`. Edits made by the probe through AT-SPI were processed (braille updated) but not spoken: Orca speaks inserted text only when it comes from typing or a paste it saw, and these came from no key event. Typing into a field under Orca needs a window with a field, which no Auvia example has yet. |
+| Screen reader | `tools/orca_check.sh` runs Orca 50.2 with throwaway settings and a silent private speech-dispatcher, and keeps its debug log. Orca said: `'Auvia - contador'` (window title, on start), `'Clique aqui'` `'button.'` `'Soma um ao contador.'` (Tab), `'Cliques: 1'` (Space), `'Cliques: 2'` (Enter). This run predates the move to Ankra's native window and was not repeated. `tools/orca_check.sh field` (the headless example, driven by the probe): on focus Orca said `'Nome'` `'entry'` `'olá.'`, and for the selection `'und'` `'selected'`. Edits made by the probe through AT-SPI were processed (braille updated) but not spoken: Orca speaks inserted text only when it comes from typing or a paste it saw, and these came from no key event. `tools/orca_check.sh eco` (Chromi's integrated demo, opened without focus), with window-only input (a synthetic FocusIn before each step, Tab, Space and keys sent with XSendEvent) and the probe: on activation Orca said `'AMAGE Eco - Ankra, Voltra, Chromi'`; Tab `'Ativar'` `'button.'` `'Conta uma ativação.'`; Space `'Ativado 1 vez.'` (live region); Tab `'Texto livre'` `'entry'` `'Escreva aqui.'` (placeholder) `'Tab foca o campo; Ctrl+C copia, Ctrl+V cola.'` (the note, via described-by); Shift+Tab `'Ativar'` `'button.'`; AT-SPI `DoAction` `'Ativado 2 vezes.'`; the refused U+2615 `'Character U+2615 cannot be displayed'` (the note, live); selection `'und'` `'selected'`. Characters typed with XSendEvent reached the field but were not echoed: Orca echoes typing it saw as key events (device events), which synthetic events to one window are not. Typed echo with real keys is not verified yet (`tools/orca_check.sh eco-typed` takes the keyboard focus for it, so it waits for a run with nobody at the desktop). |
 
 The live check (window `Auvia - contador`, XWayland, 480×320) sees this tree:
 
@@ -86,8 +89,10 @@ the button; Space → `armed=1`, `armed=0`, name `Cliques: 1`; click outside →
 `focused=0`; AT-SPI `GrabFocus` → `focused=1` + `focus:`; AT-SPI `DoAction(0)` →
 name `Cliques: 2`. The window closes normally: the accessibility connection
 is closed explicitly, then Voltra and the window (exit 0, 0 native objects
-left). While idle the counter presents nothing and wakes about 20 times per
-second to answer the bus (see Current boundaries).
+left). While idle the counter presents nothing and does not wake: its loop
+waits on the window and the bus socket together (Ankra's `watch` with
+`S.descriptor`). Measured over 5 s idle: 0 main-thread wakeups (about 105
+with the earlier 50 ms poll).
 
 Under Orca, one gap remains: after a click on empty space Kairo clears focus,
 but Orca keeps the button as its point of focus, so the next Tab back to the
@@ -150,6 +155,7 @@ svc : S.Service <- S.start(tree, log)          # join the a11y bus, Embed
 got : S.Service & List<&2, M.Request> <- S.pump(svc)   # answer calls, no wait
 svc = S.settle(svc, request, performed)        # text requests: the verdict
 svc : S.Service <- S.publish(svc, next_tree)   # diff, announce, answer
+got : S.Service & U32 <- S.descriptor(svc)     # the bus socket, for the loop's wait
 ```
 
 `kairo.bend` connects the AMAGE stack: `build(app, surface, semantics, notes)`
@@ -167,10 +173,9 @@ technology keeps its place across updates.
 
 ## Current boundaries
 
-- **Waiting on two sources.** Ankra's wait watches the X connection only, so
-  the counter wakes at least every 50 ms to answer the accessibility bus
-  (about 20 wakeups per second while idle, no frames presented). A wait that
-  watches both sockets would remove them.
+- **Waiting on two sources** needs the host's loop to watch the bus socket
+  (`S.descriptor`); Ankra does it with `watch` (an epoll set in its bridge).
+  A host without such a wait must pump on a timer.
 - **Window focus** follows the real window (Ankra's `Focused` events through
   Kairo's `WindowFocus`). Kairo ignores keys and presses while the window is
   inactive, as a desktop does; the probe's keyboard checks therefore run
@@ -211,7 +216,7 @@ technology keeps its place across updates.
 | [atspi/serve.bend](atspi/serve.bend) | Method calls and properties, introspection. |
 | [dbus/wire.bend](dbus/wire.bend) | D-Bus marshalling, unmarshalling and framing. |
 | [dbus/bus.bend](dbus/bus.bend) | A D-Bus connection: SASL EXTERNAL, Hello, send, receive, call. |
-| [native/](native/) | The native bridge: `Unix.connect`, `Unix.poll_bytes`, `Unix.uid` (C and JS). |
+| [native/](native/) | The native bridge: `Unix.connect`, `Unix.poll_bytes`, `Unix.descriptor`, `Unix.uid` (C and JS). |
 | [tests.bend](tests.bend) | Native checks. |
 | [examples/](examples/) | The accessible counter, a headless host with a button and a text field, a bus probe, a bench. |
 | [tools/](tools/) | Validation only: libatspi probe, X11 input/close helpers, the end-to-end and Orca scripts. |
@@ -219,9 +224,9 @@ technology keeps its place across updates.
 
 ## Direction
 
-A window with a text field (the integrated demo in Chromi), so Orca can be
-checked while typing; text for labels, one wait for the window and the bus,
-then longer Orca sessions (flat review, where-am-I, more widgets). More widgets and
+Orca's echo of real typing in the integrated demo (checked so far only with
+synthetic input sent to the window); text for labels, then longer Orca
+sessions (flat review, where-am-I, more widgets). More widgets and
 interfaces follow the components Mokko adds. Other platforms come after the
 Linux experience is complete.
 

@@ -214,6 +214,7 @@ and other requests leave the field unchanged and clean. Redraw when
 | `publish(svc, tree) -> IO(Service)` | Diffs against the published tree, sends the signals, then the answers owed to settled (or unsettled: `False`) text calls, and publishes `tree`. Call after every change you draw. |
 | `status(svc) -> Service & String` | `live as :1.36, app id 3` or `offline: <reason>`. |
 | `moved(svc, x, y) -> Service` | Records the window's top-left corner on the screen (from the platform, e.g. Ankra's `Moved` event); `Component` answers in screen coordinates (coord type 0) add it. Until then the origin is (0, 0). |
+| `descriptor(svc) -> IO(Service & U32)` | The bus socket's file descriptor (4294967295 when offline), so the app's loop can wait on it beside its window (Ankra: `A.watch(win, fd)`) and `pump` only when a call arrives, instead of polling on a timer. |
 | `stop(svc) -> IO(Unit)` | Closes the connection. |
 
 With `log = True` the service prints each call it answers and each change it
@@ -297,6 +298,7 @@ for setup only), `close`.
 | --- | --- | --- |
 | `Unix.connect(path) -> IO(Result<.., Socket>)` | `unix_connect.c` | `socket(AF_UNIX, SOCK_STREAM \| SOCK_CLOEXEC)`, `connect`, non-blocking. A leading `@` selects the abstract namespace. |
 | `Unix.poll_bytes(sock, max, ms) -> IO(Socket & Result<.., Maybe<List<U32>>>)` | `unix_poll_bytes.c` | `recv` with a deadline, raw bytes. `None` on timeout, `Some{[]}` when the peer closed. |
+| `Unix.descriptor(sock) -> IO(Socket & U32)` | `unix_descriptor.c` | The socket's descriptor number; the socket is handed back unchanged. |
 | `Unix.uid() -> IO(U32)` | `unix_uid.c` | `getuid()`. |
 
 Sending uses Base's `TCP.send_bytes`, which is `send(2)` on any socket. Each
