@@ -111,7 +111,7 @@ def recv.bytes(sock: Socket, bytes: List<&2, U32>, buf: List<&2, U32>, serial: U
         Socket.close(sock)
         return (Dead{"auvia: the bus closed the connection"}, Nil{})
     case Con{h, t}:
-      IO.pure(Link & List<&2, W.Message>, inbox(sock, W.drain(List.append(&2, U32, buf, Con{h, t})), serial, name))
+      IO.pure(Link & List<&2, W.Message>, inbox(sock, W.drain.more(buf, Con{h, t}), serial, name))
 
 def recv.res(sock: Socket, r: Res(Maybe<&2, List<&2, U32>>), buf: List<&2, U32>, serial: U32, name: String) ->
   IO(Link & List<&2, W.Message>):

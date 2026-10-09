@@ -537,91 +537,32 @@ def ty_align(t: Ty) -> U32:
 
 # Reader
 # ------
+#
+# Incoming bytes sit in one Array<U32>, a byte per slot, filled once from
+# the socket's list. Decoding reads it at a position with no closure per
+# byte: `run`, the only recursive def, steps a stack of jobs over a state
+# record (`St`) and stops at the first read that does not fit. Reads that
+# hand back the array next to a byte are passed to the next def as a
+# parameter, which destructures them.
 
-# ok turns False once a read runs past the end or meets a bad type.
-type In is Data:
-  In{pos: U32, bytes: List<&2, U32>, big: Bool, ok: Bool}
+# What is left to do. JDec decodes a type and pushes its value; the others
+# pop the values of their parts and push the value they make. JVarTy pops
+# the signature a variant carries and schedules its type.
+type Job is Data:
+  JDec{ty: Ty}
+  JVarTy{}
+  JVar{}
+  JArr{sig: String}
+  JStruct{}
+  JEntry{}
+  JSeq{}
 
-# A reader is a state monad over In, so decoding reads in do blocks.
-def Rd(-A: Type) -> Type:
-  In -> A & In
-
-def Rd.pure(-A: Type, x: A) -> Rd(A):
-  i => (x, i)
-
-def Rd.then(-A: Type, -B: Type, r: A & In, f: A -> Rd(B)) -> B & In:
-  (a, i) = r
-  f(a, i)
-
-def Rd.bind(-A: Type, -B: Type, m: Rd(A), f: A -> Rd(B)) -> Rd(B):
-  i => Rd.then(A, B, m(i), f)
-
-def Rd.value(-A: Type, r: A & In) -> A:
-  (a, i) = r
-  a
-
-def r_u8.go(bytes: List<&2, U32>, pos: U32, big: Bool, ok: Bool) -> U32 & In:
-  match bytes:
-    case Nil{}:
-      (0, In{pos, Nil{}, big, False{}})
-    case Con{b, rest}:
-      (b, In{(pos + 1 : U32), rest, big, ok})
-
-def r_u8(inp: In) -> U32 & In:
-  In{pos, bytes, big, ok} = inp
-  r_u8.go(bytes, pos, big, ok)
-
-def u8() -> Rd(U32):
-  i => r_u8(i)
-
-def after(r: U32 & In) -> In:
-  (b, i) = r
-  i
-
-def r_skip(n: Nat, inp: In) -> In:
-  match n:
-    case 0n:
-      inp
-    case 1n+p:
-      r_skip(p, after(r_u8(inp)))
-
-def skip(n: Nat) -> Rd(Unit):
-  i => (Unit{}, r_skip(n, i))
-
-def r_align(+a: U32, inp: In) -> In:
-  In{+pos, bytes, big, ok} = inp
-  r_skip(U32.to_nat(pad_len(a, pos)), In{pos, bytes, big, ok})
-
-def align_to(a: U32) -> Rd(Unit):
-  i => (Unit{}, r_align(a, i))
-
-def big.go(inp: In) -> Bool & In:
-  In{pos, bytes, +big, ok} = inp
-  (big, In{pos, bytes, big, ok})
-
-def big() -> Rd(Bool):
-  i => big.go(i)
-
-def position.go(inp: In) -> U32 & In:
-  In{+pos, bytes, big, ok} = inp
-  (pos, In{pos, bytes, big, ok})
-
-def position() -> Rd(U32):
-  i => position.go(i)
-
-def okay.go(inp: In) -> Bool & In:
-  In{pos, bytes, big, +ok} = inp
-  (ok, In{pos, bytes, big, ok})
-
-def okay() -> Rd(Bool):
-  i => okay.go(i)
-
-def fail.go(inp: In) -> In:
-  In{pos, bytes, big, ok} = inp
-  In{pos, bytes, big, False{}}
-
-def fail() -> Rd(Value):
-  i => (DEnd{}, fail.go(i))
+# The bytes, where the message starts in them, the read position (relative
+# to that start, as alignment is), the message length, the byte order,
+# whether every read so far fit, the jobs left and the values decoded so
+# far, newest first.
+type St is Type:
+  St{bytes: Array<U32>, base: U32, pos: U32, len: U32, big: Bool, ok: Bool, jobs: List<&2, Job>, vals: List<&2, Value>}
 
 def join2(big: Bool, a: U32, b: U32) -> U32:
   match big:
@@ -637,24 +578,6 @@ def join4(big: Bool, a: U32, b: U32, c: U32, d: U32) -> U32:
     case True{}:
       U32.or(U32.or(d, U32.shln(c, 8n)), U32.or(U32.shln(b, 16n), U32.shln(a, 24n)))
 
-def u16() -> Rd(U32):
-  do Rd<U32>:
-    align_to(2)
-    g : Bool <- big()
-    a : U32 <- u8()
-    b : U32 <- u8()
-    return join2(g, a, b)
-
-def u32() -> Rd(U32):
-  do Rd<U32>:
-    align_to(4)
-    g : Bool <- big()
-    a : U32 <- u8()
-    b : U32 <- u8()
-    c : U32 <- u8()
-    d : U32 <- u8()
-    return join4(g, a, b, c, d)
-
 def order64(big: Bool, a: U32, b: U32) -> Value:
   match big:
     case False{}:
@@ -662,133 +585,338 @@ def order64(big: Bool, a: U32, b: U32) -> Value:
     case True{}:
       DF64{a, b}
 
+# Whether n bytes from pos fit in a message of len bytes (pos <= len).
+def fits(+pos: U32, +n: U32, +len: U32) -> Bool:
+  (n <= (len - pos : U32) : U32)
+
+# Two, four and eight bytes at i.
+def rd2.b(r: Array<U32> & U32, +big: Bool, +a: U32) -> Array<U32> & U32:
+  (arr, b) = r
+  (arr, join2(big, a, b))
+
+def rd2.a(r: Array<U32> & U32, +big: Bool, +i: U32) -> Array<U32> & U32:
+  (arr, a) = r
+  rd2.b(arr[(i + 1 : U32)], big, a)
+
+def rd2(arr: Array<U32>, +big: Bool, +i: U32) -> Array<U32> & U32:
+  rd2.a(arr[i], big, i)
+
+def rd4.d(r: Array<U32> & U32, +big: Bool, +a: U32, +b: U32, +c: U32) -> Array<U32> & U32:
+  (arr, d) = r
+  (arr, join4(big, a, b, c, d))
+
+def rd4.c(r: Array<U32> & U32, +big: Bool, +i: U32, +a: U32, +b: U32) -> Array<U32> & U32:
+  (arr, c) = r
+  rd4.d(arr[(i + 3 : U32)], big, a, b, c)
+
+def rd4.b(r: Array<U32> & U32, +big: Bool, +i: U32, +a: U32) -> Array<U32> & U32:
+  (arr, b) = r
+  rd4.c(arr[(i + 2 : U32)], big, i, a, b)
+
+def rd4.a(r: Array<U32> & U32, +big: Bool, +i: U32) -> Array<U32> & U32:
+  (arr, a) = r
+  rd4.b(arr[(i + 1 : U32)], big, i, a)
+
+def rd4(arr: Array<U32>, +big: Bool, +i: U32) -> Array<U32> & U32:
+  rd4.a(arr[i], big, i)
+
+def rd8.b(r: Array<U32> & U32, +big: Bool, +a: U32) -> Array<U32> & Value:
+  (arr, b) = r
+  (arr, order64(big, a, b))
+
+def rd8.a(r: Array<U32> & U32, +big: Bool, +i: U32) -> Array<U32> & Value:
+  (arr, a) = r
+  rd8.b(rd4(arr, big, (i + 4 : U32)), big, a)
+
 # Eight bytes as DF64{hi, lo}; x and t also land here (Auvia only skips them).
-def u64() -> Rd(Value):
-  do Rd<Value>:
-    align_to(8)
-    g : Bool <- big()
-    a : U32 <- u32()
-    b : U32 <- u32()
-    return order64(g, a, b)
+def rd8(arr: Array<U32>, +big: Bool, +i: U32) -> Array<U32> & Value:
+  rd8.a(rd4(arr, big, i), big, i)
 
-def r_bytes(n: Nat, inp: In, acc: List<&2, U32>) -> List<&2, U32> & In:
-  match n:
+# Bytes i-k .. i as a list, given the read of byte i.
+def grab(k: Nat, r: Array<U32> & U32, +i: U32, acc: List<&2, U32>) -> Array<U32> & List<&2, U32>:
+  match k:
     case 0n:
-      (List.reverse(&2, U32, acc), inp)
+      (arr, b) = r
+      (arr, Con{b, acc})
     case 1n+p:
-      Rd.then(U32, List<&2, U32>, r_u8(inp), b => i => r_bytes(p, i, Con{b, acc}))
+      (arr, b) = r
+      grab(p, arr[(i - 1 : U32)], (i - 1 : U32), Con{b, acc})
 
-def bytes(n: Nat) -> Rd(List<&2, U32>):
-  i => r_bytes(n, i, Nil{})
+def bytes.go(empty: Bool, arr: Array<U32>, +from: U32, +n: U32) -> Array<U32> & List<&2, U32>:
+  match empty:
+    case True{}:
+      (arr, Nil{})
+    case False{}:
+      +last = (from + n - 1 : U32)
+      grab(U32.to_nat((n - 1 : U32)), arr[last], last, Nil{})
 
-def str() -> Rd(String):
-  do Rd<String>:
-    n : U32 <- u32()
-    bs : List<&2, U32> <- bytes(U32.to_nat(n))
-    skip(1n)
-    return from_utf8(bs)
+# The n bytes from `from`, as a list.
+def bytes(arr: Array<U32>, +from: U32, +n: U32) -> Array<U32> & List<&2, U32>:
+  bytes.go(U32.is_eq(n, 0), arr, from, n)
 
-def sig_str() -> Rd(String):
-  do Rd<String>:
-    n : U32 <- u8()
-    bs : List<&2, U32> <- bytes(U32.to_nat(n))
-    skip(1n)
-    return from_utf8(bs)
-
-def wrap(-A: Type, f: A -> Value, m: Rd(A)) -> Rd(Value):
-  Rd.bind(A, Value, m, x => Rd.pure(Value, f(x)))
-
-def basic(t: Tok) -> Rd(Value):
-  match t:
+def num_value(k: Tok, +x: U32) -> Value:
+  match k:
     case KByte{}:
-      wrap(U32, x => DByte{x}, u8())
+      DByte{x}
     case KBool{}:
-      wrap(U32, x => DBool{U32.is_ne(x, 0)}, u32())
+      DBool{U32.is_ne(x, 0)}
     case KI16{}:
-      wrap(U32, x => DI16{x}, u16())
+      DI16{x}
     case KU16{}:
-      wrap(U32, x => DI16{x}, u16())
+      DI16{x}
     case KI32{}:
-      wrap(U32, x => DI32{x}, u32())
-    case KU32{}:
-      wrap(U32, x => DU32{x}, u32())
-    case KFd{}:
-      wrap(U32, x => DU32{x}, u32())
-    case KI64{}:
-      u64()
-    case KU64{}:
-      u64()
-    case KF64{}:
-      u64()
-    case KStr{}:
-      wrap(String, s => DStr{s}, str())
-    case KPath{}:
-      wrap(String, s => DPath{s}, str())
-    case KSig{}:
-      wrap(String, s => DSig{s}, sig_str())
+      DI32{x}
     case _:
-      fail()
+      DU32{x}
 
-def rep_or_end.go(elem: Ty, +end: U32, inp: In) -> Ty & In:
-  In{+pos, bytes, big, ok} = inp
-  (Bool.pick(Ty, (pos < end : U32), TRep{elem, end}, TEnd{}), In{pos, bytes, big, ok})
+def text_value(k: Tok, s: String) -> Value:
+  match k:
+    case KPath{}:
+      DPath{s}
+    case KSig{}:
+      DSig{s}
+    case _:
+      DStr{s}
 
-# The items of an array continue while the reader is before end.
-def rep_or_end(elem: Ty, end: U32) -> Rd(Ty):
-  i => rep_or_end.go(elem, end, i)
+# State steps
+# -----------
 
-def array_end(+elem: Ty) -> Rd(U32):
-  do Rd<U32>:
-    n : U32 <- u32()
-    align_to(ty_align(elem))
-    p : U32 <- position()
-    return (p + n : U32)
+def failed(st: St) -> St:
+  St{arr, base, pos, len, big, ok, js, vs} = st
+  St{arr, base, pos, len, big, False{}, js, vs}
 
-# Decodes a value of type t. fuel bounds the recursion depth; running out
-# marks the reader failed. Eight-byte integers come back as DF64 bits.
-def dec(+fuel: Nat, t: Ty) -> Rd(Value):
-  match fuel t:
-    case 0n _:
-      fail()
-    case 1n+p TBasic{k}:
-      basic(k)
-    case 1n+p TVar{}:
-      do Rd<Value>:
-        s : String <- sig_str()
-        v : Value <- dec(p, parse_one(s))
-        return DVar{v}
-    case 1n+p TArr{+elem}:
-      do Rd<Value>:
-        end : U32 <- array_end(elem)
-        next : Ty <- rep_or_end(elem, end)
-        items : Value <- dec(p, next)
-        return DArr{ty_sig(elem), items}
-    case 1n+p TRep{+elem, +end}:
-      do Rd<Value>:
-        h : Value <- dec(p, elem)
-        next : Ty <- rep_or_end(elem, end)
-        t : Value <- dec(p, next)
-        return DSeq{h, t}
-    case 1n+p TStruct{fields}:
-      do Rd<Value>:
-        align_to(8)
-        v : Value <- dec(p, fields)
-        return DStruct{v}
-    case 1n+p TEntry{k, v}:
-      do Rd<Value>:
-        align_to(8)
-        a : Value <- dec(p, k)
-        b : Value <- dec(p, v)
-        return DEntry{a, b}
-    case 1n+p TSeq{h, t}:
-      do Rd<Value>:
-        a : Value <- dec(p, h)
-        b : Value <- dec(p, t)
-        return DSeq{a, b}
-    case 1n+p TEnd{}:
-      Rd.pure(Value, DEnd{})
-    case 1n+p TBad{}:
-      fail()
+def push_val(st: St, v: Value) -> St:
+  St{arr, base, pos, len, big, ok, js, vs} = st
+  St{arr, base, pos, len, big, ok, js, Con{v, vs}}
+
+def push2(st: St, a: Job, b: Job) -> St:
+  St{arr, base, pos, len, big, ok, js, vs} = st
+  St{arr, base, pos, len, big, ok, Con{a, Con{b, js}}, vs}
+
+def push3(st: St, a: Job, b: Job, c: Job) -> St:
+  St{arr, base, pos, len, big, ok, js, vs} = st
+  St{arr, base, pos, len, big, ok, Con{a, Con{b, Con{c, js}}}, vs}
+
+def aligned.at(fit: Bool, arr: Array<U32>, +base: U32, +pos: U32, +len: U32, big: Bool, js: List<&2, Job>, vs: List<&2, Value>) -> St:
+  match fit:
+    case True{}:
+      St{arr, base, pos, len, big, True{}, js, vs}
+    case False{}:
+      St{arr, base, pos, len, big, False{}, js, vs}
+
+# Skips the padding up to a multiple of a.
+def aligned(+a: U32, st: St) -> St:
+  St{arr, +base, +pos, +len, big, ok, js, vs} = st
+  +n = pad_len(a, pos)
+  aligned.at(ok && fits(pos, n, len), arr, base, (pos + n : U32), len, big, js, vs)
+
+# Fixed-size values: a byte, 16, 32 or 64 bits, aligned to their size.
+def fixed.got(r: Array<U32> & Value, +base: U32, +pos: U32, +len: U32, big: Bool, js: List<&2, Job>, vs: List<&2, Value>) -> St:
+  (arr, v) = r
+  St{arr, base, pos, len, big, True{}, js, Con{v, vs}}
+
+def fixed.wrap(r: Array<U32> & U32, k: Tok) -> Array<U32> & Value:
+  (arr, x) = r
+  (arr, num_value(k, x))
+
+def fixed.read(k: Tok, arr: Array<U32>, +big: Bool, +i: U32) -> Array<U32> & Value:
+  match k:
+    case KByte{}:
+      fixed.wrap(arr[i], KByte{})
+    case KI16{}:
+      fixed.wrap(rd2(arr, big, i), KI16{})
+    case KU16{}:
+      fixed.wrap(rd2(arr, big, i), KU16{})
+    case KI64{}:
+      rd8(arr, big, i)
+    case KU64{}:
+      rd8(arr, big, i)
+    case KF64{}:
+      rd8(arr, big, i)
+    case other:
+      fixed.wrap(rd4(arr, big, i), other)
+
+def fixed.at(fit: Bool, k: Tok, arr: Array<U32>, +base: U32, +q: U32, +size: U32, +len: U32, +big: Bool, js: List<&2, Job>, vs: List<&2, Value>) -> St:
+  match fit:
+    case False{}:
+      St{arr, base, q, len, big, False{}, js, vs}
+    case True{}:
+      fixed.got(fixed.read(k, arr, big, (base + q : U32)), base, (q + size : U32), len, big, js, vs)
+
+def fixed(+size: U32, k: Tok, st: St) -> St:
+  St{arr, +base, +pos, +len, big, ok, js, vs} = st
+  +n = pad_len(size, pos)
+  fixed.at(fits(pos, (n + size : U32), len), k, arr, base, (pos + n : U32), size, len, big, js, vs)
+
+# Strings, object paths and signatures: a length (u32, or a byte for
+# signatures), the UTF-8 bytes and a NUL, which is skipped unread.
+def text.got(r: Array<U32> & List<&2, U32>, k: Tok, +base: U32, +pos: U32, +len: U32, big: Bool, js: List<&2, Job>, vs: List<&2, Value>) -> St:
+  (arr, bs) = r
+  St{arr, base, pos, len, big, True{}, js, Con{text_value(k, from_utf8(bs)), vs}}
+
+def text.fit(fit: Bool, k: Tok, arr: Array<U32>, +base: U32, +start: U32, +n: U32, +len: U32, big: Bool, js: List<&2, Job>, vs: List<&2, Value>) -> St:
+  match fit:
+    case False{}:
+      St{arr, base, start, len, big, False{}, js, vs}
+    case True{}:
+      text.got(bytes(arr, (base + start : U32), n), k, base, (start + n + 1 : U32), len, big, js, vs)
+
+# r is the read of the length; the text starts at start.
+def text.at(r: Array<U32> & U32, k: Tok, +base: U32, +start: U32, +len: U32, big: Bool, js: List<&2, Job>, vs: List<&2, Value>) -> St:
+  (arr, +n) = r
+  text.fit((n < (len - start : U32) : U32), k, arr, base, start, n, len, big, js, vs)
+
+def str.at(fit: Bool, k: Tok, arr: Array<U32>, +base: U32, +q: U32, +len: U32, +big: Bool, js: List<&2, Job>, vs: List<&2, Value>) -> St:
+  match fit:
+    case False{}:
+      St{arr, base, q, len, big, False{}, js, vs}
+    case True{}:
+      text.at(rd4(arr, big, (base + q : U32)), k, base, (q + 4 : U32), len, big, js, vs)
+
+def str(k: Tok, st: St) -> St:
+  St{arr, +base, +pos, +len, big, ok, js, vs} = st
+  +n = pad_len(4, pos)
+  str.at(fits(pos, (n + 4 : U32), len), k, arr, base, (pos + n : U32), len, big, js, vs)
+
+def sig_str.at(fit: Bool, arr: Array<U32>, +base: U32, +pos: U32, +len: U32, big: Bool, js: List<&2, Job>, vs: List<&2, Value>) -> St:
+  match fit:
+    case False{}:
+      St{arr, base, pos, len, big, False{}, js, vs}
+    case True{}:
+      text.at(arr[(base + pos : U32)], KSig{}, base, (pos + 1 : U32), len, big, js, vs)
+
+def sig_str(st: St) -> St:
+  St{arr, +base, +pos, +len, big, ok, js, vs} = st
+  sig_str.at((pos < len : U32), arr, base, pos, len, big, js, vs)
+
+def basic(k: Tok, st: St) -> St:
+  match k:
+    case KByte{}:
+      fixed(1, KByte{}, st)
+    case KBool{}:
+      fixed(4, KBool{}, st)
+    case KI16{}:
+      fixed(2, KI16{}, st)
+    case KU16{}:
+      fixed(2, KU16{}, st)
+    case KI32{}:
+      fixed(4, KI32{}, st)
+    case KU32{}:
+      fixed(4, KU32{}, st)
+    case KFd{}:
+      fixed(4, KFd{}, st)
+    case KI64{}:
+      fixed(8, KI64{}, st)
+    case KU64{}:
+      fixed(8, KU64{}, st)
+    case KF64{}:
+      fixed(8, KF64{}, st)
+    case KStr{}:
+      str(KStr{}, st)
+    case KPath{}:
+      str(KPath{}, st)
+    case KSig{}:
+      sig_str(st)
+    case _:
+      failed(st)
+
+# Arrays: a u32 byte length, padding to the element's alignment (present
+# even when the array is empty), then items until the offset end.
+def array_head.fit(fit: Bool, arr: Array<U32>, +base: U32, +q: U32, +len: U32, big: Bool, js: List<&2, Job>, vs: List<&2, Value>, +elem: Ty, +end: U32) -> St:
+  match fit:
+    case False{}:
+      St{arr, base, q, len, big, False{}, js, vs}
+    case True{}:
+      St{arr, base, q, len, big, True{}, Con{JDec{TRep{elem, end}}, Con{JArr{ty_sig(elem)}, js}}, vs}
+
+def array_head.got(r: Array<U32> & U32, +base: U32, +p: U32, +len: U32, big: Bool, js: List<&2, Job>, vs: List<&2, Value>, +elem: Ty) -> St:
+  (arr, +n) = r
+  +pad = pad_len(ty_align(elem), p)
+  +q = (p + pad : U32)
+  array_head.fit(fits(p, pad, len), arr, base, q, len, big, js, vs, elem, (q + n : U32))
+
+def array_head.at(fit: Bool, arr: Array<U32>, +base: U32, +q: U32, +len: U32, +big: Bool, js: List<&2, Job>, vs: List<&2, Value>, elem: Ty) -> St:
+  match fit:
+    case False{}:
+      St{arr, base, q, len, big, False{}, js, vs}
+    case True{}:
+      array_head.got(rd4(arr, big, (base + q : U32)), base, (q + 4 : U32), len, big, js, vs, elem)
+
+def array_head(elem: Ty, st: St) -> St:
+  St{arr, +base, +pos, +len, big, ok, js, vs} = st
+  +n = pad_len(4, pos)
+  array_head.at(fits(pos, (n + 4 : U32), len), arr, base, (pos + n : U32), len, big, js, vs, elem)
+
+def rep(more: Bool, +elem: Ty, +end: U32, st: St) -> St:
+  match more:
+    case True{}:
+      push3(st, JDec{elem}, JDec{TRep{elem, end}}, JSeq{})
+    case False{}:
+      push_val(st, DEnd{})
+
+def rep_at(elem: Ty, +end: U32, st: St) -> St:
+  St{arr, base, +pos, len, big, ok, js, vs} = st
+  rep((pos < end : U32), elem, end, St{arr, base, pos, len, big, ok, js, vs})
+
+def dec(t: Ty, st: St) -> St:
+  match t:
+    case TBasic{k}:
+      basic(k, st)
+    case TVar{}:
+      push3(st, JDec{TBasic{KSig{}}}, JVarTy{}, JVar{})
+    case TArr{elem}:
+      array_head(elem, st)
+    case TRep{elem, end}:
+      rep_at(elem, end, st)
+    case TStruct{fields}:
+      push2(aligned(8, st), JDec{fields}, JStruct{})
+    case TEntry{k, v}:
+      push3(aligned(8, st), JDec{k}, JDec{v}, JEntry{})
+    case TSeq{h, t}:
+      push3(st, JDec{h}, JDec{t}, JSeq{})
+    case TEnd{}:
+      push_val(st, DEnd{})
+    case TBad{}:
+      failed(st)
+
+# Pops the values a job combines. A stack without them cannot happen; it
+# fails the read rather than inventing a value.
+def made(j: Job, st: St) -> St:
+  match j st:
+    case JVarTy{} St{arr, base, pos, len, big, ok, js, Con{DSig{s}, rest}}:
+      St{arr, base, pos, len, big, ok, Con{JDec{parse_one(s)}, js}, rest}
+    case JVar{} St{arr, base, pos, len, big, ok, js, Con{x, rest}}:
+      St{arr, base, pos, len, big, ok, js, Con{DVar{x}, rest}}
+    case JArr{s} St{arr, base, pos, len, big, ok, js, Con{x, rest}}:
+      St{arr, base, pos, len, big, ok, js, Con{DArr{s, x}, rest}}
+    case JStruct{} St{arr, base, pos, len, big, ok, js, Con{x, rest}}:
+      St{arr, base, pos, len, big, ok, js, Con{DStruct{x}, rest}}
+    case JEntry{} St{arr, base, pos, len, big, ok, js, Con{v, Con{k, rest}}}:
+      St{arr, base, pos, len, big, ok, js, Con{DEntry{k, v}, rest}}
+    case JSeq{} St{arr, base, pos, len, big, ok, js, Con{t, Con{h, rest}}}:
+      St{arr, base, pos, len, big, ok, js, Con{DSeq{h, t}, rest}}
+    case _ St{arr, base, pos, len, big, ok, js, vs}:
+      St{arr, base, pos, len, big, False{}, js, vs}
+
+def step(j: Job, st: St) -> St:
+  match j:
+    case JDec{t}:
+      dec(t, st)
+    case other:
+      made(other, st)
+
+# Runs the jobs until none is left, a read does not fit, or fuel (a bound
+# on steps) runs out.
+def run(fuel: Nat, st: St) -> St:
+  match fuel st:
+    case 0n St{a, b, p, l, g, o, js, vs}:
+      St{a, b, p, l, g, False{}, js, vs}
+    case 1n+f St{a, b, p, l, g, False{}, js, vs}:
+      St{a, b, p, l, g, False{}, js, vs}
+    case 1n+f St{a, b, p, l, g, True{}, Nil{}, vs}:
+      St{a, b, p, l, g, True{}, Nil{}, vs}
+    case 1n+f St{a, b, p, l, g, True{}, Con{j, js}, vs}:
+      run(f, step(j, St{a, b, p, l, g, True{}, js, vs}))
 
 # Header access
 # -------------
@@ -849,49 +977,6 @@ def arg(v: Value, n: Nat) -> Value:
 # Framing and decoding
 # --------------------
 
-def is_big(bs: List<&2, U32>) -> Bool:
-  match bs:
-    case Nil{}:
-      False{}
-    case Con{b, rest}:
-      U32.is_eq(b, 66)
-
-def total_size(ok: Bool, +flen: U32, blen: U32) -> U32:
-  +head = (16 + flen : U32)
-  Bool.pick(U32, ok, (head + pad_len(8, head) + blen : U32), 0)
-
-def frame_size.rd() -> Rd(U32):
-  do Rd<U32>:
-    skip(4n)
-    blen : U32 <- u32()
-    serial : U32 <- u32()
-    flen : U32 <- u32()
-    ok : Bool <- okay()
-    return total_size(ok, flen, blen)
-
-# The size of the message at the head of buf, known once its 16-byte fixed
-# header has arrived; 0 before that.
-def frame_size(+buf: List<&2, U32>) -> U32:
-  Rd.value(U32, frame_size.rd()(In{0, buf, is_big(buf), True{}}))
-
-# A complete message cut from the head of a byte stream, if one is there.
-type Cut is Data:
-  Cut{frame: Maybe<&2, List<&2, U32>>, rest: List<&2, U32>}
-
-def cut.at(+need: U32, +buf: List<&2, U32>) -> Cut:
-  +ready = U32.is_ne(need, 0) && (size(buf) >= need : U32)
-  Bool.pick(Cut, ready, Cut{Some{List.take(&2, U32, buf, U32.to_nat(need))}, List.drop(&2, U32, buf, U32.to_nat(need))}, Cut{None{}, buf})
-
-def cut(+buf: List<&2, U32>) -> Cut:
-  cut.at(frame_size(buf), buf)
-
-def decoded(ok: Bool, m: Message) -> Maybe<&2, Message>:
-  match ok:
-    case False{}:
-      None{}
-    case True{}:
-      Some{m}
-
 def header_ty() -> Ty:
   TArr{TStruct{TSeq{TBasic{KByte{}}, TSeq{TVar{}, TEnd{}}}}}
 
@@ -902,25 +987,107 @@ def message(kind: U32, flags: U32, serial: U32, +fs: Value, body: Value) -> Mess
 def body_ty(+fs: Value) -> Ty:
   parse_sig(text(lookup(fs, 8)))
 
-def decode.rd(+fuel: Nat, +total: U32) -> Rd(Maybe<&2, Message>):
-  do Rd<Maybe<&2, Message>>:
-    skip(1n)
-    kind : U32 <- u8()
-    flags : U32 <- u8()
-    ver : U32 <- u8()
-    blen : U32 <- u32()
-    serial : U32 <- u32()
-    +fields : Value <- dec(fuel, header_ty())
-    align_to(8)
-    body : Value <- dec(fuel, body_ty(fields))
-    pos : U32 <- position()
-    ok : Bool <- okay()
-    return decoded(ok && U32.is_eq(ver, 1) && U32.is_eq(pos, total), message(kind, flags, serial, fields, body))
+def top(vs: List<&2, Value>) -> Value:
+  match vs:
+    case Con{v, rest}:
+      v
+    case Nil{}:
+      DEnd{}
+
+def decoded(ok: Bool, m: Message) -> Maybe<&2, Message>:
+  match ok:
+    case False{}:
+      None{}
+    case True{}:
+      Some{m}
+
+# A bound on run's steps: no well-formed message needs more than a few per
+# byte, and a malformed one (an array of empty structs) stops here.
+def fuel(+len: U32) -> Nat:
+  U32.to_nat((len * 16 + 256 : U32))
+
+# The fixed header is read; st has decoded the header fields, then the
+# body.
+def decode.body(st: St, +ver: U32, kind: U32, flags: U32, serial: U32, +fields: Value) -> Array<U32> & Maybe<&2, Message>:
+  St{arr, base, +pos, +len, big, ok, js, vs} = st
+  (arr, decoded(ok && U32.is_eq(ver, 1) && U32.is_eq(pos, len), message(kind, flags, serial, fields, top(vs))))
+
+def decode.fields(st: St, +ver: U32, kind: U32, flags: U32, serial: U32) -> Array<U32> & Maybe<&2, Message>:
+  St{arr, base, pos, +len, big, ok, js, vs} = st
+  +fields = top(vs)
+  decode.body(run(fuel(len), aligned(8, St{arr, base, pos, len, big, ok, [JDec{body_ty(fields)}], Nil{}})), ver, kind, flags, serial, fields)
+
+def decode.serial(r: Array<U32> & U32, +base: U32, +len: U32, +big: Bool, kind: U32, flags: U32, ver: U32) -> Array<U32> & Maybe<&2, Message>:
+  (arr, serial) = r
+  decode.fields(run(fuel(len), St{arr, base, 12, len, big, True{}, [JDec{header_ty()}], Nil{}}), ver, kind, flags, serial)
+
+def decode.ver(r: Array<U32> & U32, +base: U32, +len: U32, +big: Bool, kind: U32, flags: U32) -> Array<U32> & Maybe<&2, Message>:
+  (arr, ver) = r
+  decode.serial(rd4(arr, big, (base + 8 : U32)), base, len, big, kind, flags, ver)
+
+def decode.flags(r: Array<U32> & U32, +base: U32, +len: U32, +big: Bool, kind: U32) -> Array<U32> & Maybe<&2, Message>:
+  (arr, flags) = r
+  decode.ver(arr[(base + 3 : U32)], base, len, big, kind, flags)
+
+def decode.kind(r: Array<U32> & U32, +base: U32, +len: U32, +big: Bool) -> Array<U32> & Maybe<&2, Message>:
+  (arr, kind) = r
+  decode.flags(arr[(base + 2 : U32)], base, len, big, kind)
+
+def decode.order(r: Array<U32> & U32, +base: U32, +len: U32) -> Array<U32> & Maybe<&2, Message>:
+  (arr, +e) = r
+  decode.kind(arr[(base + 1 : U32)], base, len, U32.is_eq(e, 66))
+
+def decode.fit(fit: Bool, arr: Array<U32>, +base: U32, +len: U32) -> Array<U32> & Maybe<&2, Message>:
+  match fit:
+    case False{}:
+      (arr, None{})
+    case True{}:
+      decode.order(arr[base], base, len)
+
+# Decodes the len bytes of one message starting at base; None{} if it is
+# malformed or unsupported. The array comes back for the next message.
+def decode.at(arr: Array<U32>, +base: U32, +len: U32) -> Array<U32> & Maybe<&2, Message>:
+  decode.fit((len >= 12 : U32), arr, base, len)
+
+# Loading
+# -------
+
+def depth.go(k: Nat, done: Bool, +cap: U32, +n: U32, d: Nat) -> Nat:
+  match k done:
+    case _ True{}:
+      d
+    case 0n False{}:
+      d
+    case 1n+p False{}:
+      depth.go(p, ((cap * 2 : U32) >= n : U32), (cap * 2 : U32), n, 1n+d)
+
+# The depth of the smallest array with n slots.
+def depth(+n: U32) -> Nat:
+  depth.go(32n, (1 >= n : U32), 1, n, 0n)
+
+def fill(xs: List<&2, U32>, arr: Array<U32>, +i: U32) -> Array<U32>:
+  match xs:
+    case Nil{}:
+      arr
+    case Con{x, rest}:
+      fill(rest, Array.set(U32, arr, i, x), (i + 1 : U32))
+
+# a then b in one array of n = |a| + |b| slots (or more), without
+# appending the lists.
+def load(a: List<&2, U32>, +na: U32, b: List<&2, U32>, +n: U32) -> Array<U32>:
+  fill(b, fill(a, Array.new(U32, depth(n), 0), 0), na)
+
+def snd(r: Array<U32> & Maybe<&2, Message>) -> Maybe<&2, Message>:
+  (arr, m) = r
+  m
 
 # Decodes one complete message; None{} if it is malformed or unsupported.
 def decode(+bytes: List<&2, U32>) -> Maybe<&2, Message>:
   +total = size(bytes)
-  Rd.value(Maybe<&2, Message>, decode.rd(U32.to_nat((total * 2 + 64 : U32)), total)(In{0, bytes, is_big(bytes), True{}}))
+  snd(decode.at(load(bytes, total, Nil{}, total), 0, total))
+
+# Draining
+# --------
 
 # The messages complete in a byte stream, the bytes left over, and how many
 # frames failed to decode (they are dropped).
@@ -941,18 +1108,106 @@ def is_none(m: Maybe<&2, Message>) -> U32:
     case Some{x}:
       0
 
-def drain.go(fuel: Nat, c: Cut, acc: List<&2, Message>, bad: U32) -> Inbox:
-  match fuel c:
-    case 0n Cut{f, rest}:
-      Inbox{List.reverse(&2, Message, acc), rest, bad}
-    case 1n+p Cut{None{}, rest}:
-      Inbox{List.reverse(&2, Message, acc), rest, bad}
-    case 1n+p Cut{Some{frame}, rest}:
-      +m = decode(frame)
-      drain.go(p, cut(rest), keep(m, acc), (bad + is_none(m) : U32))
+def total_size(+flen: U32, blen: U32) -> U32:
+  +head = (16 + flen : U32)
+  (head + pad_len(8, head) + blen : U32)
+
+def frame.flen(r: Array<U32> & U32, +blen: U32) -> Array<U32> & U32:
+  (arr, flen) = r
+  (arr, total_size(flen, blen))
+
+def frame.blen(r: Array<U32> & U32, +off: U32, +big: Bool) -> Array<U32> & U32:
+  (arr, blen) = r
+  frame.flen(rd4(arr, big, (off + 12 : U32)), blen)
+
+def frame.order(r: Array<U32> & U32, +off: U32) -> Array<U32> & U32:
+  (arr, +e) = r
+  +big = U32.is_eq(e, 66)
+  frame.blen(rd4(arr, big, (off + 4 : U32)), off, big)
+
+def frame.fit(fit: Bool, arr: Array<U32>, +off: U32) -> Array<U32> & U32:
+  match fit:
+    case False{}:
+      (arr, 0)
+    case True{}:
+      frame.order(arr[off], off)
+
+# The size of the message starting at off, known once its 16-byte fixed
+# header has arrived; 0 before that.
+def frame_size(arr: Array<U32>, +off: U32, +n: U32) -> Array<U32> & U32:
+  frame.fit(fits(off, 16, n), arr, off)
+
+# What the previous frame decoded to (nothing before the first one).
+type Got is Data:
+  Start{}
+  Got{message: Maybe<&2, Message>}
+
+def got.keep(g: Got, acc: List<&2, Message>) -> List<&2, Message>:
+  match g:
+    case Start{}:
+      acc
+    case Got{m}:
+      keep(m, acc)
+
+def got.bad(g: Got) -> U32:
+  match g:
+    case Start{}:
+      0
+    case Got{m}:
+      is_none(m)
+
+# The bytes, what the previous frame decoded to, and whether the frame at
+# the current offset is complete (and its size).
+type Next is Type:
+  Ready{bytes: Array<U32>, prev: Got, need: U32}
+  Short{bytes: Array<U32>, prev: Got}
+
+def next.pick(ready: Bool, arr: Array<U32>, +need: U32, g: Got) -> Next:
+  match ready:
+    case True{}:
+      Ready{arr, g, need}
+    case False{}:
+      Short{arr, g}
+
+def next(r: Array<U32> & U32, +off: U32, +n: U32, g: Got) -> Next:
+  (arr, +need) = r
+  next.pick(U32.is_ne(need, 0) && fits(off, need, n), arr, need, g)
+
+def next.decoded(r: Array<U32> & Maybe<&2, Message>, +off: U32, +n: U32) -> Next:
+  (arr, m) = r
+  next(frame_size(arr, off, n), off, n, Got{m})
+
+def rest(r: Array<U32> & List<&2, U32>) -> List<&2, U32>:
+  (arr, bs) = r
+  bs
+
+def drain.stop(arr: Array<U32>, +from: U32, +n: U32, acc: List<&2, Message>, +bad: U32) -> Inbox:
+  Inbox{List.reverse(&2, Message, acc), rest(bytes(arr, from, (n - from : U32))), bad}
+
+# Walks the frames of n bytes from off, decoding each one in place. fuel
+# bounds the frames (a well-formed one is at least 16 bytes); when it runs
+# out, a complete frame at off is dropped, as the List version did.
+def drain.go(fuel: Nat, nx: Next, +off: U32, +n: U32, acc: List<&2, Message>, +bad: U32) -> Inbox:
+  match fuel nx:
+    case 0n Ready{arr, +g, +need}:
+      drain.stop(arr, (off + need : U32), n, got.keep(g, acc), (bad + got.bad(g) : U32))
+    case 0n Short{arr, +g}:
+      drain.stop(arr, off, n, got.keep(g, acc), (bad + got.bad(g) : U32))
+    case 1n+p Short{arr, +g}:
+      drain.stop(arr, off, n, got.keep(g, acc), (bad + got.bad(g) : U32))
+    case 1n+p Ready{arr, +g, +need}:
+      +after = (off + need : U32)
+      drain.go(p, next.decoded(decode.at(arr, off, need), after, n), after, n, got.keep(g, acc), (bad + got.bad(g) : U32))
+
+# The messages complete in buf followed by more (the bytes left from the
+# last read, then the new ones), read from one array filled once.
+def drain.more(+buf: List<&2, U32>, +more: List<&2, U32>) -> Inbox:
+  +nb = size(buf)
+  +n = (nb + size(more) : U32)
+  drain.go(U32.to_nat((n / 16 + 1 : U32)), next(frame_size(load(buf, nb, more, n), 0, n), 0, n, Start{}), 0, n, Nil{}, 0)
 
 def drain(+buf: List<&2, U32>) -> Inbox:
-  drain.go(U32.to_nat((size(buf) / 16 + 1 : U32)), cut(buf), Nil{}, 0)
+  drain.more(buf, Nil{})
 
 # Message constructors
 # --------------------
