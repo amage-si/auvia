@@ -529,6 +529,13 @@ def kstate() -> KT.State:
 def closed_state() -> KT.State:
   KT.State{knodes(), 0, 0, 0, 0, 0, False{}, False{}, True{}, 480.0, 320.0}
 
+# The Kairo side of a field: node 7 is editable text, focused.
+def kfield(enabled: Bool) -> KT.Node:
+  KT.Node{7, G.Rect{20.0, 160.0, 240.0, 44.0}, "Nome", KT.EditRole{}, enabled, True{}}
+
+def fstate(enabled: Bool) -> KT.State:
+  KT.State{[kbutton(2, 20.0, True{}), ktext(), kfield(enabled)], 0, 7, 0, 0, 0, False{}, True{}, True{}, 480.0, 320.0}
+
 def activations(r: AK.Routed) -> U32:
   AK.Routed{KT.Change{s, actions, dirty, layout}, ok} = r
   K.activation_count(actions)
@@ -723,7 +730,8 @@ def checks.kairo() -> List<&2, Check>:
     Check{M.has_state(node_states(built(K.replay([KT.PointerDown{30.0, 70.0, 0}], kstate())), 2), M.Armed{}), "kairo: a held press is ARMED"},
     Check{Bool.not(M.has_state(node_states(built(kstate()), 5), M.Enabled{})) && M.has_state(node_states(built(kstate()), 5), M.Focusable{}), "kairo: disabled button is not enabled"},
     Check{same(diffs(built(kstate()), built(K.replay([tab()], kstate()))), "state:2:focused:True|focus:2"), "kairo: Tab is announced as one focus change"},
-    Check{same(e2e(), "1|name:3:Cliques: 1|announce:3:Cliques: 1:1"), "end to end: AT-SPI DoAction -> one activation -> one name change and one announcement"}
+    Check{same(e2e(), "1|name:3:Cliques: 1|announce:3:Cliques: 1:1"), "end to end: AT-SPI DoAction -> one activation -> one name change and one announcement"},
+    Check{Bool.not(accepted(AK.route(fstate(True{}), M.Activate{7, 0}))) && accepted(AK.route(fstate(True{}), M.Focus{7})), "kairo: activate requires a button; a field can take focus"}
   ]
 
 def checks() -> List<&2, Check>:

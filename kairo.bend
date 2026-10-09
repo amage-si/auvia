@@ -138,7 +138,8 @@ def unchanged(s: KT.State) -> Routed:
   Routed{KD.unchanged(s), False{}}
 
 # Exactly one Activated{id}, the same action a click or Space produces, for
-# an enabled button of a live runtime; anything else is refused unchanged.
+# an enabled button of a live runtime; anything else (a field included) is
+# refused unchanged.
 def activate(ok: Bool, +s: KT.State, +id: U32) -> Routed:
   match ok:
     case False{}:
@@ -159,6 +160,6 @@ def focus(ok: Bool, +s: KT.State, +id: U32) -> Routed:
 def route(+s: KT.State, r: M.Request) -> Routed:
   match r:
     case M.Activate{+id, index}:
-      activate(live(s) && U32.is_eq(index, 0) && eligible(target(nodes_of(s), id)), s, id)
+      activate(live(s) && U32.is_eq(index, 0) && KN.activatable(nodes_of(s), id), s, id)
     case M.Focus{+id}:
       focus(live(s) && eligible(target(nodes_of(s), id)), s, id)
