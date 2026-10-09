@@ -217,6 +217,21 @@ def serial(link: Link) -> Link & U32:
     case Live{sock, buf, +serial, name}:
       (Live{sock, buf, serial, name}, serial)
 
+def described(got: Socket & U32, buf: List<&2, U32>, serial: U32, name: String) -> Link & U32:
+  (sock, fd) = got
+  (Live{sock, buf, serial, name}, fd)
+
+# The socket's descriptor number, for an event loop that waits on it beside
+# other sources; 4294967295 for a dead link.
+def descriptor(link: Link) -> IO(Link & U32):
+  match link:
+    case Dead{why}:
+      IO.pure(Link & U32, (Dead{why}, 4294967295))
+    case Live{sock, buf, serial, name}:
+      do IO<Link & U32>:
+        got : Socket & U32 <- U.Unix.descriptor(sock)
+        return described(got, buf, serial, name)
+
 def reason_of(link: Link) -> Link & String:
   match link:
     case Dead{+why}:

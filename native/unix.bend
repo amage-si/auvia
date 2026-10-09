@@ -1,7 +1,8 @@
 import Base
 
 # Auvia's whole native surface: a Unix-domain stream socket, a non-blocking
-# byte read, and the process uid for D-Bus EXTERNAL authentication.
+# byte read, the socket's descriptor number (for an event loop) and the
+# process uid for D-Bus EXTERNAL authentication.
 # Everything above the socket (SASL, D-Bus marshalling, AT-SPI) is Bend.
 # Sending uses Base's TCP.send_bytes, which is plain send(2) on any socket.
 
@@ -18,6 +19,12 @@ def Unix.poll_bytes(sock: Socket, max: U32, ms: U32) ->
   IO(Socket & Result<&1, &1, U32 & String, Maybe<&2, List<&2, U32>>>):
   import "./unix_poll_bytes.c"
   import "./unix_poll_bytes.js"
+
+# The socket's file descriptor number, so an event loop can wait on it
+# beside other sources (Ankra's `watch`). The socket comes back unchanged.
+def Unix.descriptor(sock: Socket) -> IO(Socket & U32):
+  import "./unix_descriptor.c"
+  import "./unix_descriptor.js"
 
 # The real user id of this process.
 def Unix.uid() -> IO(U32):

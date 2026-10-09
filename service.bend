@@ -268,6 +268,19 @@ def moved(svc: Service, +x: F32, +y: F32) -> Service:
   Service{link, ctx, tree, stats, log, pend} = svc
   Service{link, O.at(ctx, x, y), tree, stats, log, pend}
 
+def descriptor.of(got: B.Link & U32, ctx: O.Ctx, tree: M.Index, stats: Stats, log: Bool, pend: Pending) -> Service & U32:
+  (link, fd) = got
+  (Service{link, ctx, tree, stats, log, pend}, fd)
+
+# The bus socket's file descriptor, so the app's event loop can wake when
+# a call arrives instead of polling (Ankra's `watch`): 4294967295 when the
+# service is offline. Pump when it is readable.
+def descriptor(svc: Service) -> IO(Service & U32):
+  Service{link, ctx, tree, stats, log, pend} = svc
+  do IO<Service & U32>:
+    got : B.Link & U32 <- B.descriptor(link)
+    return descriptor.of(got, ctx, tree, stats, log, pend)
+
 def stats(svc: Service) -> Service & Stats:
   Service{link, ctx, tree, +st, log, pend} = svc
   (Service{link, ctx, tree, st, log, pend}, st)
