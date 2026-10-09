@@ -4,7 +4,9 @@
 // recv(2) with a deadline, answering raw bytes (no UTF-8 decoding: D-Bus is
 // binary). A wake that finds data answers Some{bytes}; Some{[]} is the
 // peer's close; past the deadline it answers None{}. The pattern follows
-// Base's tcp_poll.c. The socket is handed back beside the result.
+// the try_ twins of Base's tcp_recv.c (Bend 2.0.36): it parks itself with
+// io_wait_on until the socket is readable or the deadline passes. The socket
+// is handed back beside the result.
 
 static Term auvia_unix_poll_end(Env e, IoWork* w, Term r) {
   free(w->data);
@@ -36,5 +38,5 @@ Term auvia_unix_poll_bytes_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) auvia_unix_poll_bytes_use(void) {
-  io_eff(CID(Unix.poll_bytes), auvia_unix_poll_bytes_run, 0);
+  io_eff(CID(Unix.poll_bytes), auvia_unix_poll_bytes_run);
 }

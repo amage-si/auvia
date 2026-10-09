@@ -11,5 +11,5 @@ Term auvia_unix_descriptor_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) auvia_unix_descriptor_use(void) {
-  io_eff(CID(Unix.descriptor), auvia_unix_descriptor_run, 0);
+  io_eff(CID(Unix.descriptor), auvia_unix_descriptor_run);
 }

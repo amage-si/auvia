@@ -1,5 +1,6 @@
 // Auvia native bridge: Unix.poll_bytes (JS lane)
-// recv with a deadline, answering raw bytes; mirrors Base's tcp_poll.js.
+// recv with a deadline, answering raw bytes; mirrors the try_ twins of
+// Base's tcp_recv.js.
 function unix_poll_bytes(socket, max, ms, k) {
   if (Number(max) === 0) {
     return io_tup(socket, io_fail(22));
