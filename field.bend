@@ -14,7 +14,7 @@ import ../Tessra/geometry.bend as G
 # (EditableText, caret and selection) are performed through Mokko's `feed`
 # and Kairo's editing rules, exactly as the user's own typing is. So the
 # same refusals apply: a scalar the layout or font cannot show (for
-# example U+20AC), a control character or line break, a text over the
+# example U+2615 in Liberation Sans), a control character or line break, a text over the
 # length limit. A refused request changes nothing but the field's error
 # message, and its caller is told it failed.
 

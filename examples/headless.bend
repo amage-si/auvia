@@ -19,7 +19,7 @@ import ../../Tessra/geometry.bend as G
 # An AT-SPI "click" on the button counts as a click (through Kairo);
 # GrabFocus moves Kairo's focus; Text and EditableText requests on the field
 # go through Mokko's field and Kairo's editing rules, so what the layout
-# refuses (U+20AC, for one) reaches the client as a failure and changes
+# refuses (U+2615, for one) reaches the client as a failure and changes
 # nothing. There is no clipboard here: copy and paste requests are only
 # logged. Runs for about 60 seconds.
 
