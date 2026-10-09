@@ -1,4 +1,5 @@
 import Base
+import ./keys.bend as K
 
 # Auvia's accessible model: a flat tree of nodes with stable ids.
 #
@@ -394,6 +395,124 @@ def index_in_parent(+ns: List<&2, Node>, n: Node) -> U32:
   Node{+id, p, r, nm, d, s, a, rl, at, b, v, c} = n
   Bool.pick(U32, U32.is_eq(id, 0), 0, index_of(children_of(ns, p), id))
 
+# Indexed trees
+# -------------
+#
+# Lookups by id in the node list cost O(n) each; a tree indexed once
+# (O(n log n)) answers them in O(log n) from keyed trees.
+
+# Where a node is listed: the parent's id and the index there.
+type Place is Data:
+  Place{parent: U32, index: U32}
+
+# The nodes, keyed by id (the first node with an id wins, as with `find`),
+# and the place of each listed child.
+type Index is Data:
+  Index{nodes: List<&2, Node>, ids: K.Keys<Node>, places: K.Keys<Place>}
+
+def put_new.pick(-V: Data, had: Bool, m: K.Keys<V>, +k: U32, v: V) -> K.Keys<V>:
+  match had:
+    case True{}:
+      m
+    case False{}:
+      K.put(V, m, k, v)
+
+# m with k bound to v, unless k is already there.
+def put_new(-V: Data, +m: K.Keys<V>, +k: U32, v: V) -> K.Keys<V>:
+  put_new.pick(V, K.has(V, m, k), m, k, v)
+
+def ids.go(ns: List<&2, Node>, m: K.Keys<Node>) -> K.Keys<Node>:
+  match ns:
+    case Nil{}:
+      m
+    case Con{+n, rest}:
+      ids.go(rest, put_new(Node, m, node_id(n), n))
+
+def places.kids(+parent: U32, kids: List<&2, U32>, +i: U32, m: K.Keys<Place>) -> K.Keys<Place>:
+  match kids:
+    case Nil{}:
+      m
+    case Con{+c, rest}:
+      places.kids(parent, rest, (i + 1 : U32), put_new(Place, m, c, Place{parent, i}))
+
+def places.go(ns: List<&2, Node>, m: K.Keys<Place>) -> K.Keys<Place>:
+  match ns:
+    case Nil{}:
+      m
+    case Con{+n, rest}:
+      places.go(rest, places.kids(node_id(n), node_children(n), 0, m))
+
+def index.of(+ns: List<&2, Node>, +ids: K.Keys<Node>) -> Index:
+  Index{ns, ids, places.go(K.values(Node, ids), K.new(Place))}
+
+def index(+ns: List<&2, Node>) -> Index:
+  index.of(ns, ids.go(ns, K.new(Node)))
+
+def indexed(t: Tree) -> Index:
+  Tree{ns} = t
+  index(ns)
+
+def listed(ix: Index) -> List<&2, Node>:
+  match ix:
+    case Index{ns, ids, ps}:
+      ns
+
+def get(ix: Index, +id: U32) -> Maybe<&2, Node>:
+  match ix:
+    case Index{ns, ids, ps}:
+      K.get(Node, ids, id)
+
+def known(ix: Index, +id: U32) -> Bool:
+  match ix:
+    case Index{ns, ids, ps}:
+      K.has(Node, ids, id)
+
+def place_of(ix: Index, +id: U32) -> Maybe<&2, Place>:
+  match ix:
+    case Index{ns, ids, ps}:
+      K.get(Place, ps, id)
+
+def children_in(ix: Index, +id: U32) -> List<&2, U32>:
+  kids_of(get(ix, id))
+
+def position.pick(same: Bool, +i: U32, +ix: Index, +p: U32, +id: U32) -> U32:
+  match same:
+    case True{}:
+      i
+    case False{}:
+      index_of(children_in(ix, p), id)
+
+def position.of(m: Maybe<&2, Place>, +ix: Index, +p: U32, +id: U32) -> U32:
+  match m:
+    case None{}:
+      index_of(children_in(ix, p), id)
+    case Some{Place{+q, +i}}:
+      position.pick(U32.is_eq(q, p), i, ix, p, id)
+
+# index_in_parent over an index: the place a child was listed at, read
+# from the list only when another parent listed it first.
+def position(+ix: Index, n: Node) -> U32:
+  Node{+id, +p, r, nm, d, s, a, rl, at, b, v, c} = n
+  Bool.pick(U32, U32.is_eq(id, 0), 0, position.of(place_of(ix, id), ix, p, id))
+
+def in_parent.pick(same: Bool, +ix: Index, +p: U32, +id: U32) -> Bool:
+  match same:
+    case True{}:
+      True{}
+    case False{}:
+      contains_id(children_in(ix, p), id)
+
+def in_parent.of(m: Maybe<&2, Place>, +ix: Index, +p: U32, +id: U32) -> Bool:
+  match m:
+    case None{}:
+      contains_id(children_in(ix, p), id)
+    case Some{Place{+q, i}}:
+      in_parent.pick(U32.is_eq(q, p), ix, p, id)
+
+# Whether the node p lists id among its children.
+def in_parent(+ix: Index, +p: U32, +id: U32) -> Bool:
+  in_parent.of(place_of(ix, id), ix, p, id)
+
 def is_enabled(n: Node) -> Bool:
   has_state(node_states(n), Enabled{})
 
@@ -434,14 +553,33 @@ def first_problem(ps: List<&2, Problem>) -> Result<&2, &2, Problem, Unit>:
     case Con{p, rest}:
       Fail{p}
 
-def duplicates(ns: List<&2, Node>) -> List<&2, Problem>:
+def lasts(ns: List<&2, Node>, +i: U32, m: K.Keys<U32>) -> K.Keys<U32>:
+  match ns:
+    case Nil{}:
+      m
+    case Con{n, rest}:
+      lasts(rest, (i + 1 : U32), K.put(U32, m, node_id(n), i))
+
+def is_last(m: Maybe<&2, U32>, +i: U32) -> Bool:
+  match m:
+    case None{}:
+      True{}
+    case Some{j}:
+      U32.is_eq(j, i)
+
+# A node is a duplicate when its id comes again later in the list; last
+# maps each id to the position of its last node.
+def duplicates.go(ns: List<&2, Node>, +i: U32, +last: K.Keys<U32>) -> List<&2, Problem>:
   match ns:
     case Nil{}:
       Nil{}
-    case Con{n, +rest}:
+    case Con{n, rest}:
       +id = node_id(n)
-      +tail = duplicates(rest)
-      Bool.pick(List<&2, Problem>, has(rest, id), Con{DuplicateId{id}, tail}, tail)
+      +tail = duplicates.go(rest, (i + 1 : U32), last)
+      Bool.pick(List<&2, Problem>, is_last(K.get(U32, last, id), i), tail, Con{DuplicateId{id}, tail})
+
+def duplicates(+ns: List<&2, Node>) -> List<&2, Problem>:
+  duplicates.go(ns, 0, lasts(ns, 0, K.new(U32)))
 
 def child_named(m: Maybe<&2, Node>, +parent: U32) -> Bool:
   match m:
@@ -452,48 +590,48 @@ def child_named(m: Maybe<&2, Node>, +parent: U32) -> Bool:
 
 # Every non-root node is listed by its parent, and every listed child exists
 # and names that parent back.
-def child_ok(+ns: List<&2, Node>, +parent: U32, kids: List<&2, U32>) -> List<&2, Problem>:
+def child_ok(+ix: Index, +parent: U32, kids: List<&2, U32>) -> List<&2, Problem>:
   match kids:
     case Nil{}:
       Nil{}
     case Con{+c, rest}:
-      +tail = child_ok(ns, parent, rest)
-      +ok = U32.is_ne(c, 0) && child_named(find(ns, c), parent)
+      +tail = child_ok(ix, parent, rest)
+      +ok = U32.is_ne(c, 0) && child_named(get(ix, c), parent)
       Bool.pick(List<&2, Problem>, ok, tail, Con{MissingChild{parent, c}, tail})
 
-def targets_ok(+ns: List<&2, Node>, ts: List<&2, U32>) -> Bool:
+def targets_ok(+ix: Index, ts: List<&2, U32>) -> Bool:
   match ts:
     case Nil{}:
       True{}
     case Con{t, rest}:
-      has(ns, t) && targets_ok(ns, rest)
+      known(ix, t) && targets_ok(ix, rest)
 
-def relations_ok(+ns: List<&2, Node>, rs: List<&2, Relation>) -> Bool:
+def relations_ok(+ix: Index, rs: List<&2, Relation>) -> Bool:
   match rs:
     case Nil{}:
       True{}
     case Con{Relation{k, ts}, rest}:
-      targets_ok(ns, ts) && relations_ok(ns, rest)
+      targets_ok(ix, ts) && relations_ok(ix, rest)
 
-def links(+all: List<&2, Node>, ns: List<&2, Node>) -> List<&2, Problem>:
+def links(+ix: Index, ns: List<&2, Node>) -> List<&2, Problem>:
   match ns:
     case Nil{}:
       Nil{}
     case Con{n, rest}:
       Node{+id, +p, r, nm, d, s, a, rl, at, b, v, kids} = n
-      +tail = List.append(&2, Problem, child_ok(all, id, kids), links(all, rest))
-      +listed = U32.is_eq(id, 0) || contains_id(children_of(all, p), id)
+      +tail = List.append(&2, Problem, child_ok(ix, id, kids), links(ix, rest))
+      +listed = U32.is_eq(id, 0) || in_parent(ix, p, id)
       +with_parent = Bool.pick(List<&2, Problem>, listed, tail, Con{BadParent{id}, tail})
-      Bool.pick(List<&2, Problem>, relations_ok(all, rl), with_parent, Con{BadRelation{id}, with_parent})
+      Bool.pick(List<&2, Problem>, relations_ok(ix, rl), with_parent, Con{BadRelation{id}, with_parent})
 
 # Checks the invariants every published tree must hold.
-def check.rooted(ok: Bool, +ns: List<&2, Node>) -> Result<&2, &2, Problem, Unit>:
+def check.rooted(ok: Bool, +ix: Index) -> Result<&2, &2, Problem, Unit>:
   match ok:
     case False{}:
       Fail{NoRoot{}}
     case True{}:
-      first_problem(List.append(&2, Problem, duplicates(ns), links(ns, ns)))
+      first_problem(List.append(&2, Problem, duplicates(listed(ix)), links(ix, listed(ix))))
 
 def check(t: Tree) -> Result<&2, &2, Problem, Unit>:
-  Tree{+ns} = t
-  check.rooted(root_ok(find(ns, 0)), ns)
+  +ix = indexed(t)
+  check.rooted(root_ok(get(ix, 0)), ix)

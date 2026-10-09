@@ -1,5 +1,6 @@
 import Base
 import ./model.bend as M
+import ./keys.bend as K
 
 # Diffing two published trees into the precise changes an assistive
 # technology needs, instead of rebuilding its view.
@@ -145,24 +146,37 @@ def kids_eq(a: List<&2, U32>, b: List<&2, U32>) -> Bool:
     case _ _:
       False{}
 
+# Each child's first index in a children list.
+def kid_map(kids: List<&2, U32>, +i: U32, m: K.Keys<U32>) -> K.Keys<U32>:
+  match kids:
+    case Nil{}:
+      m
+    case Con{+c, rest}:
+      kid_map(rest, (i + 1 : U32), M.put_new(U32, m, c, i))
+
+def at(m: Maybe<&2, U32>) -> U32:
+  match m:
+    case None{}:
+      0
+    case Some{i}:
+      i
+
 # Old children missing from now, at their old index, last first.
-def gone(+id: U32, +old: List<&2, U32>, walk: List<&2, U32>, +now: List<&2, U32>) -> List<&2, Change>:
+def gone(+id: U32, +old: K.Keys<U32>, walk: List<&2, U32>, +now: K.Keys<U32>, +acc: List<&2, Change>) -> List<&2, Change>:
   match walk:
     case Nil{}:
-      Nil{}
+      acc
     case Con{+c, rest}:
-      +tail = gone(id, old, rest, now)
-      Bool.pick(List<&2, Change>, M.contains_id(now, c), tail,
-        List.append(&2, Change, tail, [ChildRemoved{id, M.index_of(old, c), c}]))
+      gone(id, old, rest, now, Bool.pick(List<&2, Change>, K.has(U32, now, c), acc, Con{ChildRemoved{id, at(K.get(U32, old, c)), c}, acc}))
 
 # New children missing from old, at their new index, first first.
-def came(+id: U32, +now: List<&2, U32>, walk: List<&2, U32>, +old: List<&2, U32>) -> List<&2, Change>:
+def came(+id: U32, +now: K.Keys<U32>, walk: List<&2, U32>, +old: K.Keys<U32>) -> List<&2, Change>:
   match walk:
     case Nil{}:
       Nil{}
     case Con{+c, rest}:
       +tail = came(id, now, rest, old)
-      Bool.pick(List<&2, Change>, M.contains_id(old, c), tail, Con{ChildAdded{id, M.index_of(now, c), c}, tail})
+      Bool.pick(List<&2, Change>, K.has(U32, old, c), tail, Con{ChildAdded{id, at(K.get(U32, now, c)), c}, tail})
 
 def is_empty(xs: List<&2, Change>) -> Bool:
   match xs:
@@ -171,13 +185,23 @@ def is_empty(xs: List<&2, Change>) -> Bool:
     case _:
       False{}
 
-def children_delta(+id: U32, +old: List<&2, U32>, +now: List<&2, U32>) -> Delta:
-  +removed = gone(id, old, old, now)
-  +added = came(id, now, now, old)
+def children_delta.of(+id: U32, +old: List<&2, U32>, +now: List<&2, U32>, +om: K.Keys<U32>, +nm: K.Keys<U32>) -> Delta:
+  +removed = gone(id, om, old, nm, Nil{})
+  +added = came(id, nm, now, om)
   # Same members in another order: move every child out and back in.
-  +reorder = is_empty(removed) && is_empty(added) && Bool.not(kids_eq(old, now))
-  Delta{Bool.pick(List<&2, Change>, reorder, gone(id, old, old, Nil{}), removed), Nil{}, Nil{}, Nil{},
-    Nil{}, Bool.pick(List<&2, Change>, reorder, came(id, now, now, Nil{}), added), Nil{}}
+  +reorder = is_empty(removed) && is_empty(added)
+  Delta{Bool.pick(List<&2, Change>, reorder, gone(id, om, old, K.new(U32), Nil{}), removed), Nil{}, Nil{}, Nil{},
+    Nil{}, Bool.pick(List<&2, Change>, reorder, came(id, nm, now, K.new(U32)), added), Nil{}}
+
+def children_delta.pick(same: Bool, +id: U32, +old: List<&2, U32>, +now: List<&2, U32>) -> Delta:
+  match same:
+    case True{}:
+      empty()
+    case False{}:
+      children_delta.of(id, old, now, kid_map(old, 0, K.new(U32)), kid_map(now, 0, K.new(U32)))
+
+def children_delta(+id: U32, +old: List<&2, U32>, +now: List<&2, U32>) -> Delta:
+  children_delta.pick(kids_eq(old, now), id, old, now)
 
 # Nodes
 # -----
@@ -219,24 +243,26 @@ def pair_delta(m: Maybe<&2, M.Node>, n: M.Node) -> Delta:
     case Some{o}:
       node_delta(o, n)
 
-def common(+old: List<&2, M.Node>, now: List<&2, M.Node>) -> Delta:
+def common(+old: M.Index, now: List<&2, M.Node>) -> Delta:
   match now:
     case Nil{}:
       empty()
     case Con{+n, rest}:
-      join(pair_delta(M.find(old, M.node_id(n)), n), common(old, rest))
+      join(pair_delta(M.get(old, M.node_id(n)), n), common(old, rest))
 
-def departures(old: List<&2, M.Node>, +now: List<&2, M.Node>) -> Delta:
+def departures(old: List<&2, M.Node>, +now: M.Index) -> Delta:
   match old:
     case Nil{}:
       empty()
     case Con{o, rest}:
       +id = M.node_id(o)
       +tail = departures(rest, now)
-      Bool.pick(Delta, M.has(now, id), tail, join(Delta{Nil{}, [Removed{id}], Nil{}, Nil{}, Nil{}, Nil{}, Nil{}}, tail))
+      Bool.pick(Delta, M.known(now, id), tail, join(Delta{Nil{}, [Removed{id}], Nil{}, Nil{}, Nil{}, Nil{}, Nil{}}, tail))
+
+# diff over trees already indexed (see M.index).
+def diff.indexed(+old: M.Index, +now: M.Index) -> List<&2, Change>:
+  flatten(join(departures(M.listed(old), now), common(old, M.listed(now))))
 
 # Every change from old to now, in announcement order.
 def diff(old: M.Tree, now: M.Tree) -> List<&2, Change>:
-  M.Tree{+a} = old
-  M.Tree{+b} = now
-  flatten(join(departures(a, b), common(a, b)))
+  diff.indexed(M.indexed(old), M.indexed(now))

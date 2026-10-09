@@ -173,7 +173,7 @@ def app_props(+ctx: O.Ctx, root: Bool) -> List<&2, List<&2, Prop>>:
     Prop{O.i_application(), "AtspiVersion", W.DStr{"2.1"}},
     Prop{O.i_application(), "Id", W.DI32{id}}])
 
-def table(+ctx: O.Ctx, +ns: List<&2, M.Node>, +n: M.Node) -> List<&2, Prop>:
+def table(+ctx: O.Ctx, +ix: M.Index, +n: M.Node) -> List<&2, Prop>:
   O.Ctx{bus, app, +locale, x, y} = ctx
   M.Node{+id, p, r, nm, d, s, +a, rl, at, b, v, c} = n
   List.concat(&2, Prop, [
@@ -239,15 +239,15 @@ def child_or_root(m: Maybe<&2, M.Node>) -> M.Node:
 
 # The first child whose box holds the point (ATK's semantics: a direct
 # child; the client descends further itself).
-def child_at(+ns: List<&2, M.Node>, kids: List<&2, U32>, +pt: O.Offset) -> Maybe<&2, U32>:
+def child_at(+ix: M.Index, kids: List<&2, U32>, +pt: O.Offset) -> Maybe<&2, U32>:
   match kids:
     case Nil{}:
       None{}
     case Con{+k, rest}:
-      Bool.pick(Maybe<&2, U32>, point_in(M.node_bounds(child_or_root(M.find(ns, k))), pt), Some{k}, child_at(ns, rest, pt))
+      Bool.pick(Maybe<&2, U32>, point_in(M.node_bounds(child_or_root(M.get(ix, k))), pt), Some{k}, child_at(ix, rest, pt))
 
-def window_point(+ctx: O.Ctx, +ns: List<&2, M.Node>, +n: M.Node, +body: W.Value) -> O.Offset:
-  to_window(O.offset(ctx, W.word(W.arg(body, 2n)), O.parent_box(ns, n)),
+def window_point(+ctx: O.Ctx, +ix: M.Index, +n: M.Node, +body: W.Value) -> O.Offset:
+  to_window(O.offset(ctx, W.word(W.arg(body, 2n)), O.parent_box(ix, n)),
     O.from_i32(W.word(W.arg(body, 0n))), O.from_i32(W.word(W.arg(body, 1n))))
 
 # Actions
@@ -332,23 +332,23 @@ def pos_pair(b: M.Box) -> Reply:
   M.Box{x, y, w, h} = b
   Ok{W.seq([W.DI32{O.to_i32(x)}, W.DI32{O.to_i32(y)}])}
 
-def ref_pair(+ctx: O.Ctx, +ns: List<&2, M.Node>, +n: M.Node, coord: U32) -> Reply:
-  pos_pair(O.box_in(ctx, ns, n, coord))
+def ref_pair(+ctx: O.Ctx, +ix: M.Index, +n: M.Node, coord: U32) -> Reply:
+  pos_pair(O.box_in(ctx, ix, n, coord))
 
 def size_pair(b: M.Box) -> Reply:
   M.Box{x, y, w, h} = b
   Ok{W.seq([W.DI32{O.to_i32(w)}, W.DI32{O.to_i32(h)}])}
 
-def on_node(op: Op, +ctx: O.Ctx, +ns: List<&2, M.Node>, +n: M.Node, +body: W.Value) -> Reply:
+def on_node(op: Op, +ctx: O.Ctx, +ix: M.Index, +n: M.Node, +body: W.Value) -> Reply:
   match op:
     case Introspect{}:
       xml(x_ifaces(O.interfaces(n)))
     case Ping{}:
       Ok{W.DEnd{}}
     case PropGet{}:
-      prop_find(table(ctx, ns, n), W.text(W.arg(body, 0n)), W.text(W.arg(body, 1n)))
+      prop_find(table(ctx, ix, n), W.text(W.arg(body, 0n)), W.text(W.arg(body, 1n)))
     case PropGetAll{}:
-      one(W.array("{sv}", prop_entries(table(ctx, ns, n), W.text(W.arg(body, 0n)))))
+      one(W.array("{sv}", prop_entries(table(ctx, ix, n), W.text(W.arg(body, 0n)))))
     case PropSet{}:
       prop_set(W.text(W.arg(body, 0n)), W.text(W.arg(body, 1n)), var_inner(W.arg(body, 2n)), U32.is_eq(M.node_id(n), 0))
     case ChildAt{}:
@@ -356,7 +356,7 @@ def on_node(op: Op, +ctx: O.Ctx, +ns: List<&2, M.Node>, +n: M.Node, +body: W.Val
     case Children{}:
       one(O.children_value(ctx, M.node_children(n)))
     case IndexInParent{}:
-      one(W.DI32{M.index_in_parent(ns, n)})
+      one(W.DI32{M.position(ix, n)})
     case RelationSet{}:
       M.Node{id, p, r, nm, d, s, a, rl, at, b, v, c} = n
       one(O.relations_value(ctx, rl))
@@ -376,13 +376,13 @@ def on_node(op: Op, +ctx: O.Ctx, +ns: List<&2, M.Node>, +n: M.Node, +body: W.Val
     case Interfaces{}:
       one(O.strings(O.interfaces(n)))
     case Contains{}:
-      one(W.DBool{point_in(M.node_bounds(n), window_point(ctx, ns, n, body))})
+      one(W.DBool{point_in(M.node_bounds(n), window_point(ctx, ix, n, body))})
     case AtPoint{}:
-      one(child_ref(ctx, child_at(ns, M.node_children(n), window_point(ctx, ns, n, body))))
+      one(child_ref(ctx, child_at(ix, M.node_children(n), window_point(ctx, ix, n, body))))
     case Extents{}:
-      one(O.extents(ctx, ns, n, W.word(W.arg(body, 0n))))
+      one(O.extents(ctx, ix, n, W.word(W.arg(body, 0n))))
     case Position{}:
-      ref_pair(ctx, ns, n, W.word(W.arg(body, 0n)))
+      ref_pair(ctx, ix, n, W.word(W.arg(body, 0n)))
     case Size{}:
       size_pair(M.node_bounds(n))
     case Layer{}:
@@ -415,10 +415,10 @@ def on_node(op: Op, +ctx: O.Ctx, +ns: List<&2, M.Node>, +n: M.Node, +body: W.Val
     case NoOp{}:
       unknown_method()
 
-def on_cache(op: Op, +ctx: O.Ctx, +ns: List<&2, M.Node>) -> Reply:
+def on_cache(op: Op, +ctx: O.Ctx, +ix: M.Index) -> Reply:
   match op:
     case Items{}:
-      one(W.array(O.item_sig(), O.cache_items(ctx, ns, ns)))
+      one(W.array(O.item_sig(), O.cache_items(ctx, ix, M.listed(ix))))
     case Introspect{}:
       xml(x_cache())
     case Ping{}:
@@ -438,15 +438,15 @@ def target_node(m: Maybe<&2, M.Node>) -> Target:
     case Some{n}:
       ToNode{n}
 
-def target_id(m: Maybe<&2, U32>, +ns: List<&2, M.Node>) -> Target:
+def target_id(m: Maybe<&2, U32>, +ix: M.Index) -> Target:
   match m:
     case None{}:
       ToNothing{}
     case Some{id}:
-      target_node(M.find(ns, id))
+      target_node(M.get(ix, id))
 
-def target(+p: String, +ns: List<&2, M.Node>) -> Target:
-  Bool.pick(Target, String.eq(p, O.cache_path()), ToCache{}, target_id(O.path_id(p), ns))
+def target(+p: String, +ix: M.Index) -> Target:
+  Bool.pick(Target, String.eq(p, O.cache_path()), ToCache{}, target_id(O.path_id(p), ix))
 
 # A call is accepted when its interface (if given) is the one that owns
 # the member, and the object implements that interface.
@@ -467,14 +467,14 @@ def elsewhere(op: Op) -> Reply:
     case _:
       unknown_object()
 
-def dispatch(+op: Op, +iface: String, t: Target, +ctx: O.Ctx, +ns: List<&2, M.Node>, +body: W.Value) -> Reply:
+def dispatch(+op: Op, +iface: String, t: Target, +ctx: O.Ctx, +ix: M.Index, +body: W.Value) -> Reply:
   match t:
     case ToNothing{}:
       Bool.pick(Reply, String.is_empty(iface) || String.eq(iface, op_iface(op)), elsewhere(op), unknown_object())
     case ToCache{}:
-      Bool.pick(Reply, allowed(op, iface, [O.i_cache()]), on_cache(op, ctx, ns), unknown_method())
+      Bool.pick(Reply, allowed(op, iface, [O.i_cache()]), on_cache(op, ctx, ix), unknown_method())
     case ToNode{+n}:
-      Bool.pick(Reply, allowed(op, iface, O.interfaces(n)), on_node(op, ctx, ns, n, body), unknown_method())
+      Bool.pick(Reply, allowed(op, iface, O.interfaces(n)), on_node(op, ctx, ix, n, body), unknown_method())
 
 # Serving
 # -------
@@ -514,20 +514,20 @@ def finish.go(reply: Reply, +send: Bool, +call: W.Message, ctx: O.Ctx) -> Served
 def finish(+call: W.Message, reply: Reply, ctx: O.Ctx) -> Served:
   finish.go(reply, wants_reply(flags_of(call)), call, ctx)
 
-def answer.call(is_call: Bool, +ctx: O.Ctx, +ns: List<&2, M.Node>, +m: W.Message) -> Served:
+def answer.call(is_call: Bool, +ctx: O.Ctx, +ix: M.Index, +m: W.Message) -> Served:
   match is_call:
     case False{}:
       Served{ctx, Nil{}, Nil{}}
     case True{}:
       W.Message{k, f, s, r, +p, +i, +mem, e, d, sn, +b} = m
-      finish(m, dispatch(op_of(mem), i, target(p, ns), ctx, ns, b), ctx)
+      finish(m, dispatch(op_of(mem), i, target(p, ix), ctx, ix, b), ctx)
 
 # Answers one message: method calls get a reply (unless they asked for
 # none); returns, errors and signals (the registry's Embed reply, the bus's
 # NameAcquired) need nothing.
-def answer(+ctx: O.Ctx, +ns: List<&2, M.Node>, +m: W.Message) -> Served:
+def answer.in(+ctx: O.Ctx, +ix: M.Index, +m: W.Message) -> Served:
   W.Message{k, f, s, r, p, i, mem, e, d, sn, b} = m
-  answer.call(U32.is_eq(k, 1), ctx, ns, m)
+  answer.call(U32.is_eq(k, 1), ctx, ix, m)
 
 def ctx_of(s: Served) -> O.Ctx:
   Served{ctx, out, reqs} = s
@@ -538,11 +538,26 @@ def prepend(a: Served, b: Served) -> Served:
   Served{c2, o2, r2} = b
   Served{c2, List.append(&2, W.Message, o1, o2), List.append(&2, M.Request, r1, r2)}
 
-# Answers every message in order against one tree.
+def answer(+ctx: O.Ctx, +ns: List<&2, M.Node>, +m: W.Message) -> Served:
+  answer.in(ctx, M.index(ns), m)
+
+def serve.go(msgs: List<&2, W.Message>, +ctx: O.Ctx, +ix: M.Index) -> Served:
+  match msgs:
+    case Nil{}:
+      Served{ctx, Nil{}, Nil{}}
+    case Con{m, rest}:
+      +a = answer.in(ctx, ix, m)
+      prepend(a, serve.go(rest, ctx_of(a), ix))
+
+# Answers every message in order against one tree, indexed (see M.index).
+def serve.in(msgs: List<&2, W.Message>, +ctx: O.Ctx, +ix: M.Index) -> Served:
+  serve.go(msgs, ctx, ix)
+
+# Answers every message in order against one tree. The tree is indexed
+# only when there is something to answer.
 def serve(msgs: List<&2, W.Message>, +ctx: O.Ctx, +tree: M.Tree) -> Served:
   match msgs:
     case Nil{}:
       Served{ctx, Nil{}, Nil{}}
     case Con{m, rest}:
-      +a = answer(ctx, M.nodes(tree), m)
-      prepend(a, serve(rest, ctx_of(a), tree))
+      serve.go(Con{m, rest}, ctx, M.indexed(tree))

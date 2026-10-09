@@ -15,7 +15,7 @@ type Stats is Data:
 
 # log: print one line per call answered and per signal batch sent.
 type Service is Type:
-  Service{link: B.Link, ctx: O.Ctx, tree: M.Tree, stats: Stats, log: Bool}
+  Service{link: B.Link, ctx: O.Ctx, tree: M.Index, stats: Stats, log: Bool}
 
 def a11y_address() -> W.Message:
   W.call("org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress", W.DEnd{})
@@ -142,16 +142,17 @@ def locale.pick(r: B.Res(String)) -> String:
 def registered(got: B.Link & String, +tree: M.Tree, locale: String, +log: Bool) -> IO(Service):
   (link, +name) = got
   +ctx = {O.Ctx{name, 0, locale, 0.0, 0.0} : O.Ctx}
-  +changes = D.diff(M.Tree{Nil{}}, tree)
+  +ix = M.indexed(tree)
+  +changes = D.diff.indexed(M.index(Nil{}), ix)
   do IO<Service>:
-    sent : B.Link <- B.send(link, Con{embed(name), O.announce(ctx, M.nodes(tree), changes)})
+    sent : B.Link <- B.send(link, Con{embed(name), O.announce.in(ctx, ix, changes)})
     log_changes(log, changes)
-    return Service{sent, ctx, tree, Stats{0, 0, 0}, log}
+    return Service{sent, ctx, ix, Stats{0, 0, 0}, log}
 
 def connected(r: B.Res(String), +tree: M.Tree, locale: String, log: Bool) -> IO(Service):
   match r:
     case Fail{e}:
-      IO.pure(Service, Service{B.Dead{B.reason(e)}, O.Ctx{"", 0, locale, 0.0, 0.0}, tree, Stats{0, 0, 0}, log})
+      IO.pure(Service, Service{B.Dead{B.reason(e)}, O.Ctx{"", 0, locale, 0.0, 0.0}, M.indexed(tree), Stats{0, 0, 0}, log})
     case Done{address}:
       do IO<Service>:
         link : B.Link <- B.open(address)
@@ -169,7 +170,7 @@ def stop(svc: Service) -> IO(Unit):
   Service{link, ctx, tree, stats, log} = svc
   B.close(link)
 
-def status.of(got: B.Link & String, +ctx: O.Ctx, tree: M.Tree, stats: Stats, log: Bool) -> Service & String:
+def status.of(got: B.Link & String, +ctx: O.Ctx, tree: M.Index, stats: Stats, log: Bool) -> Service & String:
   (link, +why) = got
   O.Ctx{+bus, +app, l, x, y} = ctx
   (Service{link, ctx, tree, stats, log},
@@ -199,12 +200,13 @@ def count(-A: Data, xs: List<&2, A>) -> U32:
 # Replaces the published tree, announcing exactly what changed.
 def publish(svc: Service, +tree: M.Tree) -> IO(Service):
   Service{link, +ctx, old, Stats{c, s, r}, +log} = svc
-  +changes = D.diff(old, tree)
-  +msgs = O.announce(ctx, M.nodes(tree), changes)
+  +ix = M.indexed(tree)
+  +changes = D.diff.indexed(old, ix)
+  +msgs = O.announce.in(ctx, ix, changes)
   do IO<Service>:
     log_changes(log, changes)
     sent : B.Link <- B.send(link, msgs)
-    return Service{sent, ctx, tree, Stats{c, (s + count(W.Message, msgs) : U32), r}, log}
+    return Service{sent, ctx, ix, Stats{c, (s + count(W.Message, msgs) : U32), r}, log}
 
 # Answering
 # ---------
@@ -217,18 +219,18 @@ def calls(msgs: List<&2, W.Message>) -> List<&2, W.Message>:
       +tail = calls(rest)
       Bool.pick(List<&2, W.Message>, U32.is_eq(k, 1), Con{W.Message{k, f, s, r, p, i, m, e, d, sn, b}, tail}, tail)
 
-def answered(link: B.Link, served: S.Served, tree: M.Tree, stats: Stats, +log: Bool, +n: U32) -> IO(Service & List<&2, M.Request>):
+def answered(link: B.Link, served: S.Served, tree: M.Index, stats: Stats, +log: Bool, +n: U32) -> IO(Service & List<&2, M.Request>):
   S.Served{ctx, out, +reqs} = served
   Stats{c, s, r} = stats
   do IO<Service & List<&2, M.Request>>:
     sent : B.Link <- B.send(link, out)
     return (Service{sent, ctx, tree, Stats{(c + n : U32), s, (r + count(M.Request, reqs) : U32)}, log}, reqs)
 
-def received(got: B.Link & List<&2, W.Message>, +ctx: O.Ctx, +tree: M.Tree, stats: Stats, +log: Bool) -> IO(Service & List<&2, M.Request>):
+def received(got: B.Link & List<&2, W.Message>, +ctx: O.Ctx, +tree: M.Index, stats: Stats, +log: Bool) -> IO(Service & List<&2, M.Request>):
   (link, +msgs) = got
   do IO<Service & List<&2, M.Request>>:
     log_calls(log, calls(msgs))
-    answered(link, S.serve(msgs, ctx, tree), tree, stats, log, count(W.Message, calls(msgs)))
+    answered(link, S.serve.in(msgs, ctx, tree), tree, stats, log, count(W.Message, calls(msgs)))
 
 def calls_seen(svc: Service) -> Service & U32:
   Service{link, ctx, tree, Stats{+c, s, r}, log} = svc

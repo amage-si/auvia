@@ -227,8 +227,8 @@ def parent_box.of(m: Maybe<&2, M.Node>) -> M.Box:
     case Some{p}:
       M.node_bounds(p)
 
-def parent_box(+ns: List<&2, M.Node>, n: M.Node) -> M.Box:
-  parent_box.of(M.find(ns, M.node_parent(n)))
+def parent_box(+ix: M.Index, n: M.Node) -> M.Box:
+  parent_box.of(M.get(ix, M.node_parent(n)))
 
 # The context with the window's top-left corner at (x, y) on the screen,
 # as the platform reports it (Ankra's Moved events).
@@ -259,11 +259,11 @@ def box_value(b: M.Box) -> W.Value:
   W.tuple([W.DI32{to_i32(x)}, W.DI32{to_i32(y)}, W.DI32{to_i32(w)}, W.DI32{to_i32(h)}])
 
 # The node's box in coord_type's coordinates.
-def box_in(ctx: Ctx, +ns: List<&2, M.Node>, +n: M.Node, coord: U32) -> M.Box:
-  moved(M.node_bounds(n), offset(ctx, coord, parent_box(ns, n)))
+def box_in(ctx: Ctx, +ix: M.Index, +n: M.Node, coord: U32) -> M.Box:
+  moved(M.node_bounds(n), offset(ctx, coord, parent_box(ix, n)))
 
-def extents(ctx: Ctx, +ns: List<&2, M.Node>, +n: M.Node, coord: U32) -> W.Value:
-  box_value(box_in(ctx, ns, n, coord))
+def extents(ctx: Ctx, +ix: M.Index, +n: M.Node, coord: U32) -> W.Value:
+  box_value(box_in(ctx, ix, n, coord))
 
 def inside(b: M.Box, +px: F32, +py: F32) -> Bool:
   M.Box{+x, +y, w, h} = b
@@ -281,18 +281,18 @@ def node_states_value(n: M.Node) -> W.Value:
 # One org.a11y.atspi.Cache item: ((so) self, (so) app, (so) parent,
 # i index in parent, i child count, as interfaces, s name, u role,
 # s description, au states).
-def cache_item(+ctx: Ctx, +ns: List<&2, M.Node>, +n: M.Node) -> W.Value:
+def cache_item(+ctx: Ctx, +ix: M.Index, +n: M.Node) -> W.Value:
   M.Node{+id, p, r, nm, d, s, a, rl, at, b, v, c} = n
   W.tuple([node_ref(ctx, id), node_ref(ctx, 0), parent_ref(ctx, n),
-    W.DI32{M.index_in_parent(ns, n)}, W.DI32{M.count(c)}, strings(interfaces(n)),
+    W.DI32{M.position(ix, n)}, W.DI32{M.count(c)}, strings(interfaces(n)),
     W.DStr{nm}, W.DU32{M.role_code(r)}, W.DStr{d}, state_value(s)])
 
-def cache_items(+ctx: Ctx, +all: List<&2, M.Node>, ns: List<&2, M.Node>) -> List<&2, W.Value>:
+def cache_items(+ctx: Ctx, +ix: M.Index, ns: List<&2, M.Node>) -> List<&2, W.Value>:
   match ns:
     case Nil{}:
       Nil{}
     case Con{n, rest}:
-      Con{cache_item(ctx, all, n), cache_items(ctx, all, rest)}
+      Con{cache_item(ctx, ix, n), cache_items(ctx, ix, rest)}
 
 def item_sig() -> String:
   "((so)(so)(so)iiassusau)"
@@ -314,15 +314,15 @@ def object_event(id: U32, member: String, detail: String, d1: U32, d2: U32, data
 def property_event(id: U32, name: String, data: W.Value) -> W.Message:
   object_event(id, "PropertyChange", name, 0, 0, data)
 
-def added_item(+ctx: Ctx, +ns: List<&2, M.Node>, m: Maybe<&2, M.Node>) -> List<&2, W.Message>:
+def added_item(+ctx: Ctx, +ix: M.Index, m: Maybe<&2, M.Node>) -> List<&2, W.Message>:
   match m:
     case None{}:
       Nil{}
     case Some{n}:
-      [W.signal(cache_path(), i_cache(), "AddAccessible", W.seq([cache_item(ctx, ns, n)]))]
+      [W.signal(cache_path(), i_cache(), "AddAccessible", W.seq([cache_item(ctx, ix, n)]))]
 
-# The bus messages announcing one change. ns is the new tree.
-def signals(+ctx: Ctx, +ns: List<&2, M.Node>, c: D.Change) -> List<&2, W.Message>:
+# The bus messages announcing one change. ix is the new tree.
+def signals.in(+ctx: Ctx, +ix: M.Index, c: D.Change) -> List<&2, W.Message>:
   match c:
     case D.StateChanged{id, s, on}:
       [object_event(id, "StateChanged", M.state_name(s), Bool.to_u32(on), 0, W.DI32{0})]
@@ -345,7 +345,7 @@ def signals(+ctx: Ctx, +ns: List<&2, M.Node>, c: D.Change) -> List<&2, W.Message
     case D.FocusGained{id}:
       [event(id, "org.a11y.atspi.Event.Focus", "Focus", "", 0, 0, W.DI32{0})]
     case D.Added{id}:
-      added_item(ctx, ns, M.find(ns, id))
+      added_item(ctx, ix, M.get(ix, id))
     case D.Removed{id}:
       [W.signal(cache_path(), i_cache(), "RemoveAccessible", W.seq([node_ref(ctx, id)]))]
     case D.WindowActivated{id}:
@@ -355,9 +355,24 @@ def signals(+ctx: Ctx, +ns: List<&2, M.Node>, c: D.Change) -> List<&2, W.Message
     case D.Announced{id, text, level}:
       [object_event(id, "Announcement", "", level, 0, W.DStr{text})]
 
+def announce.go(+ctx: Ctx, +ix: M.Index, cs: List<&2, D.Change>) -> List<&2, W.Message>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case Con{c, rest}:
+      List.append(&2, W.Message, signals.in(ctx, ix, c), announce.go(ctx, ix, rest))
+
+# The bus messages announcing changes, over the new tree indexed.
+def announce.in(+ctx: Ctx, +ix: M.Index, cs: List<&2, D.Change>) -> List<&2, W.Message>:
+  announce.go(ctx, ix, cs)
+
+def signals(+ctx: Ctx, +ns: List<&2, M.Node>, c: D.Change) -> List<&2, W.Message>:
+  signals.in(ctx, M.index(ns), c)
+
+# The bus messages announcing changes; ns is the new tree.
 def announce(+ctx: Ctx, +ns: List<&2, M.Node>, cs: List<&2, D.Change>) -> List<&2, W.Message>:
   match cs:
     case Nil{}:
       Nil{}
     case Con{c, rest}:
-      List.append(&2, W.Message, signals(ctx, ns, c), announce(ctx, ns, rest))
+      announce.go(ctx, M.index(ns), Con{c, rest})
