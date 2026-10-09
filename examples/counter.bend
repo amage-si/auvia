@@ -28,9 +28,9 @@ import ../service.bend as S
 # hear window:activate/deactivate), the window's position on the screen
 # (Component answers screen coordinates from it), and the end of the loop
 # with the final state (the accessibility connection is closed explicitly).
-# Between events the loop waits on the window for at most 50 ms, then
-# answers whatever assistive technologies asked: the bus is a second event
-# source the window wait does not watch.
+# The loop waits on the window and on the accessibility bus at once
+# (Ankra's `watch`): it wakes for a window event or a call from an
+# assistive technology, and for nothing else.
 
 def app_name() -> String:
   "auvia-counter"
@@ -40,9 +40,6 @@ def title() -> String:
 
 def frame_id() -> U32:
   100
-
-def pump_ms() -> U32:
-  50
 
 # What Mokko does not carry yet: the button's description and key, and
 # which node the button controls.
@@ -146,7 +143,7 @@ def texture(img: Image) -> Array<U32>:
 def redraw(p: MV.Pending, +font: F.Font, cache: MV.Cache, svc: S.Service, +redraws: U32, +g: Vo.Gpu) -> IO(Loop.Step<Host>):
   match p:
     case MV.Pending{model, False{}}:
-      IO.pure(Loop.Step<Host>, Loop.Sleep{Host{model, font, cache, svc, redraws, g}, pump_ms()})
+      IO.pure(Loop.Step<Host>, Loop.Keep{Host{model, font, cache, svc, redraws, g}})
     case MV.Pending{+model, True{}}:
       do IO<Loop.Step<Host>>:
         +ready : MV.Cache <- MV.unwrap(MV.Cache, MV.refresh(cache, font, MV.count(model)))
@@ -183,7 +180,7 @@ def drawn(owed: Bool, h: Host) -> Loop.Step<Host>:
     case True{}:
       Loop.Redraw{h}
     case False{}:
-      Loop.Sleep{h, pump_ms()}
+      Loop.Keep{h}
 
 # Presents the latest frame (one textured quad); another frame is owed only
 # when the swapchain had to be rebuilt.
@@ -220,6 +217,23 @@ def focused(+win: A.Win, model: D.Model, +font: F.Font) -> IO(D.Model):
     p : MV.Pending <- MV.unwrap(MV.Pending, MV.events([T.WindowFocus{A.focused(win)}], MV.Pending{model, False{}}, font))
     return model_of(p)
 
+def watching.if(none: Bool, +win: A.Win, fd: U32) -> IO(A.Win):
+  match none:
+    case True{}:
+      IO.pure(A.Win, win)
+    case False{}:
+      A.watch(win, fd)
+
+def watching(+win: A.Win, +fd: U32) -> IO(A.Win):
+  watching.if(U32.is_eq(fd, A.unwatched()), win, fd)
+
+def run(+win: A.Win, model: D.Model, font: F.Font, cache: MV.Cache, g: Vo.Gpu, got: S.Service & U32) -> IO(Unit):
+  (a11y, fd) = got
+  do IO<Unit>:
+    +w : A.Win <- watching(win, fd)
+    end : A.Win & Host <- Loop.run(~Host, ~update, ~draw, w, Host{model, font, cache, a11y, 1, g})
+    finish(end)
+
 def started(+win: A.Win, +model: D.Model, +font: F.Font, +assets: MV.Cache, +g: Vo.Gpu) -> IO(Unit):
   do IO<Unit>:
     +frame : D.Frame <- MV.unwrap(D.Frame, MV.view_cached(model, assets))
@@ -228,8 +242,8 @@ def started(+win: A.Win, +model: D.Model, +font: F.Font, +assets: MV.Cache, +g: 
     a11y : S.Service <- S.start(tree(frame, model), True{})
     a11y : S.Service <- report(S.status(a11y))
     IO.print("counter ready: click, Tab/Space/Enter, or an AT-SPI client")
-    end : A.Win & Host <- Loop.run(~Host, ~update, ~draw, win, Host{model, font, assets, a11y, 1, g1})
-    finish(end)
+    got : S.Service & U32 <- S.descriptor(a11y)
+    run(win, model, font, assets, g1, got)
 
 def main() -> IO(Unit):
   do IO<Unit>:
