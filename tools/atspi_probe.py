@@ -8,9 +8,12 @@ does and records what it sees. It is not part of Auvia.
       --label-prefix "Cliques:" --out build/evidence/probe.json
 
 Steps: find the app under the desktop, dump its tree, subscribe to focus,
-state, name and children events, GrabFocus the button, invoke its action
-through AT-SPI (DoAction), and check the counter label changed exactly once.
-Exit status 0 only when every check passes.
+state, name, children and text events, GrabFocus the button, invoke its
+action through AT-SPI (DoAction), and check the counter label changed
+exactly once. With --field, also read the text field's text, caret and
+extents through Text, edit it through EditableText (insert, delete, a
+refused "€"), move its caret and select. Exit status 0 only when every
+check passes.
 """
 
 import argparse
@@ -90,6 +93,104 @@ def walk(acc):
         yield from walk(acc.get_child_at_index(i))
 
 
+def text_of(acc):
+    return Atspi.Text.get_text(acc, 0, -1)
+
+
+def probe_field(app, args, result, check, pump):
+    """Reads and edits a text field the way a screen reader and an
+    on-screen keyboard do: Text for reading, EditableText for editing."""
+    field = None
+    for acc in walk(app):
+        if acc.get_role() == Atspi.Role.ENTRY and acc.get_name() == args.field:
+            field = acc
+    check("field present with entry role", field is not None, args.field)
+    if field is None:
+        return
+    ifaces = sorted(field.get_interfaces())
+    fstates = states(field)
+    check("field implements Text and EditableText", "Text" in ifaces and "EditableText" in ifaces, ifaces)
+    check("field is editable, single-line, focusable and enabled",
+          all(s in fstates for s in ("editable", "single-line", "focusable", "enabled")), fstates)
+
+    def events(mark, kind):
+        return [e for e in result["events"][mark:] if e["type"].startswith(kind) and e["source"] == args.field]
+
+    # A screen reader follows focus: the field takes it as Tab would.
+    mark = len(result["events"])
+    ok = field.grab_focus()
+    pump(1.0)
+    check("GrabFocus on the field moves focus there and is announced",
+          ok and "focused" in states(field) and events(mark, "focus:") and events(mark, "object:state-changed:focused"),
+          {"ok": ok, "states": states(field)})
+
+    text = text_of(field)
+    n = Atspi.Text.get_character_count(field)
+    caret = Atspi.Text.get_caret_offset(field)
+    word = Atspi.Text.get_string_at_offset(field, 0, Atspi.TextGranularity.WORD)
+    check("text, count, caret and word read through Text",
+          len(text) == n and caret == n and n > 0 and word.content == text.split(" ")[0] and word.start_offset == 0,
+          {"text": text, "count": n, "caret": caret, "word": [word.content, word.start_offset, word.end_offset]})
+    box = field.get_extents(Atspi.CoordType.WINDOW)
+    first = Atspi.Text.get_character_extents(field, 0, Atspi.CoordType.WINDOW)
+    whole = Atspi.Text.get_range_extents(field, 0, n, Atspi.CoordType.WINDOW)
+    inside = (box.x <= first.x and first.x + first.width <= box.x + box.width and first.width > 0 and first.height > 0
+              and box.y <= first.y and first.y + first.height <= box.y + box.height
+              and whole.x == first.x and whole.width >= first.width)
+    check("character and range extents lie inside the field", inside,
+          {"field": [box.x, box.y, box.width, box.height], "char0": [first.x, first.y, first.width, first.height],
+           "range": [whole.x, whole.y, whole.width, whole.height]})
+    result["field"] = {"text": text, "extents": [box.x, box.y, box.width, box.height],
+                       "char0": [first.x, first.y, first.width, first.height]}
+
+    mark = len(result["events"])
+    t0 = time.time()
+    ok = Atspi.EditableText.insert_text(field, n, " mundo", len(" mundo".encode()))
+    took = round(time.time() - t0, 3)
+    after = text_of(field)
+    pump(0.5)
+    inserted = events(mark, "object:text-changed:insert")
+    check("InsertText through AT-SPI is performed, visible and announced",
+          ok and after == text + " mundo" and len(inserted) == 1 and inserted[0]["detail1"] == n
+          and inserted[0]["detail2"] == 6 and events(mark, "object:text-caret-moved"),
+          {"ok": ok, "seconds": took, "text": after, "events": inserted})
+
+    mark = len(result["events"])
+    ok = Atspi.EditableText.delete_text(field, 0, n + 1)
+    after = text_of(field)
+    pump(0.5)
+    deleted = events(mark, "object:text-changed:delete")
+    check("DeleteText through AT-SPI is performed, visible and announced",
+          ok and after == "mundo" and len(deleted) == 1 and deleted[0]["detail1"] == 0 and deleted[0]["detail2"] == n + 1,
+          {"ok": ok, "text": after, "events": deleted})
+
+    mark = len(result["events"])
+    before = text_of(field)
+    ok = Atspi.EditableText.insert_text(field, 0, "\u20ac", 3)
+    after = text_of(field)
+    pump(0.5)
+    check("a refused InsertText (U+20AC) reports failure and changes nothing",
+          ok is False and after == before and not events(mark, "object:text-changed"),
+          {"ok": ok, "before": before, "after": after})
+
+    mark = len(result["events"])
+    ok = Atspi.Text.set_caret_offset(field, 2)
+    pump(0.5)
+    moved = events(mark, "object:text-caret-moved")
+    check("SetCaretOffset moves the caret and is announced",
+          ok and Atspi.Text.get_caret_offset(field) == 2 and moved and moved[-1]["detail1"] == 2,
+          {"ok": ok, "caret": Atspi.Text.get_caret_offset(field), "events": moved})
+
+    mark = len(result["events"])
+    ok = Atspi.Text.set_selection(field, 0, 1, 4)
+    pump(0.5)
+    sel = Atspi.Text.get_selection(field, 0)
+    check("SetSelection selects and is announced",
+          ok and Atspi.Text.get_n_selections(field) == 1 and (sel.start_offset, sel.end_offset) == (1, 4)
+          and events(mark, "object:text-selection-changed"),
+          {"ok": ok, "selection": [sel.start_offset, sel.end_offset]})
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--app", required=True)
@@ -99,6 +200,7 @@ def main():
     ap.add_argument("--timeout", type=float, default=15.0)
     ap.add_argument("--x11-title", help="also drive the window with X11 input sent only to it")
     ap.add_argument("--outside", default="440,300", help="a window point outside every control")
+    ap.add_argument("--field", help="name of an editable text field to read and edit through AT-SPI")
     args = ap.parse_args()
 
     result = {"checks": [], "events": []}
@@ -123,7 +225,8 @@ def main():
 
     listener = Atspi.EventListener.new(on_event)
     for kind in ("object:state-changed", "object:property-change:accessible-name",
-                 "object:children-changed", "focus:"):
+                 "object:children-changed", "focus:", "object:text-changed",
+                 "object:text-caret-moved", "object:text-selection-changed"):
         listener.register(kind)
 
     app = find_app(args.app, args.timeout)
@@ -230,6 +333,9 @@ def main():
     check("counter incremented exactly once through AT-SPI", n0 is not None and n1 == n0 + 1,
           {"before": before, "after": after})
     check("name change announced exactly once", len(name_events) == 1, name_events)
+
+    if args.field:
+        probe_field(app, args, result, check, pump)
 
     result["elapsed_s"] = round(time.time() - t0, 3)
     with open(args.out, "w") as f:
