@@ -200,6 +200,154 @@ def sample() -> W.Message:
   W.Message{1, 0, 42, 0, "/org/a11y/atspi/accessible/2", "org.a11y.atspi.Action", "DoAction", "", ":1.42", ":1.9",
     W.seq([W.DI32{0}, W.array("(so)", [W.tuple([W.DStr{"ação"}, W.DPath{"/a"}])]), W.f64(0.5)])}
 
+# Every field of a value, so two decodings compare in full.
+def vtext(v: W.Value) -> String:
+  match v:
+    case W.DByte{x}:
+      "y" ++ U32.show(x)
+    case W.DBool{b}:
+      "b" ++ Bool.show(b)
+    case W.DI16{x}:
+      "n" ++ U32.show(x)
+    case W.DI32{x}:
+      "i" ++ U32.show(x)
+    case W.DU32{x}:
+      "u" ++ U32.show(x)
+    case W.DF64{hi, lo}:
+      "d" ++ U32.show(hi) ++ ":" ++ U32.show(lo)
+    case W.DStr{s}:
+      "s'" ++ s ++ "'"
+    case W.DPath{s}:
+      "o'" ++ s ++ "'"
+    case W.DSig{s}:
+      "g'" ++ s ++ "'"
+    case W.DVar{x}:
+      "v<" ++ vtext(x) ++ ">"
+    case W.DArr{s, xs}:
+      "a" ++ s ++ "[" ++ vtext(xs) ++ "]"
+    case W.DStruct{xs}:
+      "(" ++ vtext(xs) ++ ")"
+    case W.DEntry{k, x}:
+      "{" ++ vtext(k) ++ "=" ++ vtext(x) ++ "}"
+    case W.DSeq{h, t}:
+      vtext(h) ++ "," ++ vtext(t)
+    case W.DEnd{}:
+      "."
+
+def full_text(m: Maybe<&2, W.Message>) -> String:
+  +x = m
+  msg_text(x) ++ "|" ++ vtext(body_of(x))
+
+def fulls_text(ms: List<&2, W.Message>) -> String:
+  match ms:
+    case Nil{}:
+      ""
+    case Con{m, rest}:
+      full_text(Some{m}) ++ ";" ++ fulls_text(rest)
+
+# Length and a 32-bit polynomial hash of a byte list.
+def digest.go(bs: List<&2, U32>, +n: U32, +h: U32) -> String:
+  match bs:
+    case Nil{}:
+      U32.show(n) ++ "#" ++ U32.show(h)
+    case Con{b, rest}:
+      digest.go(rest, (n + 1 : U32), (h * 31 + b + 1 : U32))
+
+def digest(bs: List<&2, U32>) -> String:
+  digest.go(bs, 0, 7)
+
+def full_inbox(ib: W.Inbox) -> String:
+  W.Inbox{ms, rest, bad} = ib
+  fulls_text(ms) ++ "bad=" ++ U32.show(bad) ++ " rest=" ++ digest(rest)
+
+# A body that exercises every type the decoder knows, nested.
+def every_value() -> W.Value:
+  W.seq([W.DByte{255}, W.DBool{True{}}, W.DI16{65535}, W.DI32{(0 - 7 : U32)}, W.DU32{4000000000}, W.f64(F32.neg(0.75)),
+    W.DStr{"ação ✓ 𝄞"}, W.DPath{"/a/b"}, W.DSig{"a{sv}"}, W.DVar{W.DVar{W.array("y", [W.DByte{1}, W.DByte{2}])}},
+    W.array("a(ys)", [W.array("(ys)", [W.tuple([W.DByte{3}, W.DStr{"x"}])]), W.array("(ys)", Nil{})]),
+    W.array("{sv}", [W.DEntry{W.DStr{"k"}, W.DVar{W.tuple([W.DI32{1}, W.f64(2.0)])}}, W.DEntry{W.DStr{""}, W.DVar{W.DSig{""}}}]),
+    W.tuple([W.DByte{9}, W.tuple([W.DI16{1}, W.DU32{2}])]), W.array("n", [W.DI16{1}, W.DI16{2}, W.DI16{3}])])
+
+def every_message() -> W.Message:
+  W.Message{4, 1, 77, 5, "/org/a11y/atspi/accessible/9", "org.a11y.atspi.Event.Object", "PropertyChange", "", ":1.3", ":1.4",
+    every_value()}
+
+def reencodes.of(m: Maybe<&2, W.Message>, bs: List<&2, U32>) -> Bool:
+  match m:
+    case None{}:
+      False{}
+    case Some{x}:
+      bytes_eq(W.encode(x), bs)
+
+# Encoding what decode returns gives back the bytes it read.
+def reencodes(m: W.Message) -> Bool:
+  +bs = W.encode(m)
+  reencodes.of(W.decode(bs), bs)
+
+def corrupt_version(bs: List<&2, U32>) -> List<&2, U32>:
+  match bs:
+    case Con{a, Con{b, Con{c, Con{v, rest}}}}:
+      Con{a, Con{b, Con{c, Con{2, rest}}}}
+    case other:
+      other
+
+# GLib reply and signal, a bad frame, our own signal, and half a big-endian
+# call: two good frames, one dropped, one good, and a tail.
+def stream() -> List<&2, U32>:
+  List.concat(&2, U32, [golden_reply_signal(), corrupt_version(golden_setid()), W.encode(every_message()),
+    golden_setid(), List.take(&2, U32, golden_doaction_be(), 40n)])
+
+# Generated trees
+# ---------------
+
+# Buttons 2.. under the frame. Version 1 drops every fifth, renames every
+# third, moves every fourth, moves focus, disables every seventh and adds
+# three new buttons at the end.
+def gen.kept(+id: U32, +v: U32) -> Bool:
+  U32.is_eq(v, 0) || U32.is_ne((id % 5 : U32), 0)
+
+def gen.node(+id: U32, +v: U32) -> M.Node:
+  +changed = U32.is_ne(v, 0)
+  button(id, "n" ++ U32.show(id) ++ Bool.pick(String, changed && U32.is_eq((id % 3 : U32), 0), "!", ""),
+    U32.is_eq(id, (v * 5 + 2 : U32)), changed || U32.is_ne((id % 7 : U32), 0),
+    M.Box{Bool.pick(F32, changed && U32.is_eq((id % 4 : U32), 0), 24.0, 20.0), 60.0, 160.0, 44.0})
+
+def gen.kids(n: Nat, +id: U32, +v: U32, tail: List<&2, U32>) -> List<&2, U32>:
+  match n:
+    case 0n:
+      tail
+    case 1n+p:
+      +rest = gen.kids(p, (id + 1 : U32), v, tail)
+      Bool.pick(List<&2, U32>, gen.kept(id, v), Con{id, rest}, rest)
+
+def gen.nodes(n: Nat, +id: U32, +v: U32, tail: List<&2, M.Node>) -> List<&2, M.Node>:
+  match n:
+    case 0n:
+      tail
+    case 1n+p:
+      +rest = gen.nodes(p, (id + 1 : U32), v, tail)
+      Bool.pick(List<&2, M.Node>, gen.kept(id, v), Con{gen.node(id, v), rest}, rest)
+
+def gen(+n: Nat, +v: U32) -> M.Tree:
+  +extra = U32.is_ne(v, 0)
+  M.Tree{Con{M.application("app", [1]), Con{frame(gen.kids(n, 2, v, Bool.pick(List<&2, U32>, extra, [300, 301, 302], Nil{}))),
+    gen.nodes(n, 2, v, Bool.pick(List<&2, M.Node>, extra, [gen.node(300, v), gen.node(301, v), gen.node(302, v)], Nil{}))}}}
+
+def with_node(t: M.Tree, n: M.Node) -> M.Tree:
+  M.Tree{ns} = t
+  M.Tree{List.append(&2, M.Node, ns, [n])}
+
+def encode_all(ms: List<&2, W.Message>) -> List<&2, U32>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{m, rest}:
+      List.append(&2, U32, W.encode(m), encode_all(rest))
+
+def reply_digest(s: S.Served) -> String:
+  S.Served{c, out, rs} = s
+  digest(encode_all(out))
+
 def is_int(v: W.Value, +x: U32) -> Bool:
   match v:
     case W.DI32{y}:
@@ -484,6 +632,13 @@ def checks.wire() -> List<&2, Check>:
     Check{is_int(W.arg(body_of(W.decode(golden_setid())), 2n), 7), "wire: variant argument of Properties.Set decodes"},
     Check{same(W.from_utf8(W.utf8("ação, café, ✓, 𝄞")), "ação, café, ✓, 𝄞"), "wire: UTF-8 round trip up to four bytes"},
     Check{f64_is(W.f64(1.0), 1072693248, 0) && f64_is(W.f64(F32.neg(2.5)), 3221487616, 0) && f64_is(W.f64(0.0), 0, 0) && f64_is(W.f64(0.1), 1069128089, 2684354560), "wire: F32 to double is exact"},
+    Check{reencodes(sample()) && reencodes(every_message()) && reencodes(W.error_reply(sample(), "a.B", "ç")), "wire: decode then encode reproduces every byte"},
+    Check{same(full_text(W.decode(golden_setid())), "1/0/5/0//org/a11y/atspi/accessible/root/org.freedesktop.DBus.Properties/Set//:1.42/:1.2/ssv|s'org.a11y.atspi.Application',s'Id',v<i7>,."), "wire: GLib Properties.Set decodes in full"},
+    Check{same(full_text(W.decode(golden_doaction_be())), "1/0/300/0//org/a11y/atspi/accessible/2/org.a11y.atspi.Action/DoAction//:1.42/:1.9/i|i0,."), "wire: GLib big-endian call decodes in full"},
+    Check{same(full_text(W.decode(W.encode(every_message()))), "4/1/77/5//org/a11y/atspi/accessible/9/org.a11y.atspi.Event.Object/PropertyChange//:1.3/:1.4/ybniudsogvaa(ys)a{sv}(y(nu))an|y255,bTrue,n65535,i4294967289,u4000000000,d3219652608:0,s'ação ✓ 𝄞',o'/a/b',g'a{sv}',v<v<ay[y1,y2,.]>>,aa(ys)[a(ys)[(y3,s'x',.),.],a(ys)[.],.],a{sv}[{s'k'=v<(i1,d1073741824:0,.)>},{s''=v<g''>},.],(y9,(n1,u2,.),.),an[n1,n2,n3,.],."), "wire: every type, nested, decodes in full"},
+    Check{same(full_inbox(W.drain(stream())), "2/1/7/1/////:1.5/org.freedesktop.DBus/s|s':1.5',.;4/1/8/0//org/freedesktop/DBus/org.freedesktop.DBus/NameAcquired////s|s':1.5',.;4/1/77/5//org/a11y/atspi/accessible/9/org.a11y.atspi.Event.Object/PropertyChange//:1.3/:1.4/ybniudsogvaa(ys)a{sv}(y(nu))an|y255,bTrue,n65535,i4294967289,u4000000000,d3219652608:0,s'ação ✓ 𝄞',o'/a/b',g'a{sv}',v<v<ay[y1,y2,.]>>,aa(ys)[a(ys)[(y3,s'x',.),.],a(ys)[.],.],a{sv}[{s'k'=v<(i1,d1073741824:0,.)>},{s''=v<g''>},.],(y9,(n1,u2,.),.),an[n1,n2,n3,.],.;1/0/5/0//org/a11y/atspi/accessible/root/org.freedesktop.DBus.Properties/Set//:1.42/:1.2/ssv|s'org.a11y.atspi.Application',s'Id',v<i7>,.;bad=1 rest=40#651902801"), "wire: a stream splits into good frames, a dropped frame and a tail"},
+    Check{same(full_inbox(W.drain(golden_reply_signal())), "2/1/7/1/////:1.5/org.freedesktop.DBus/s|s':1.5',.;4/1/8/0//org/freedesktop/DBus/org.freedesktop.DBus/NameAcquired////s|s':1.5',.;bad=0 rest=0#7"), "wire: two GLib messages drain in full"},
+    Check{same(digest(W.encode(every_message())), "394#1391462325") && same(digest(W.encode(sample())), "200#3622258120"), "wire: encoder output is pinned"},
     Check{U32.is_eq(W.is_none(W.decode([108, 1, 0, 1, 0, 0])), 1), "wire: truncated message is rejected"}
   ]
 
@@ -540,6 +695,11 @@ def checks.serving() -> List<&2, Check>:
     Check{U32.is_eq(out_count(ask(no_reply_call())), 0) && same(req_text(requests(ask(no_reply_call()))), "activate:2:0;"), "atspi: NO_REPLY_EXPECTED calls act without a reply"},
     Check{U32.is_eq(out_count(ask(W.signal("/x", "a.b", "C", W.DEnd{}))), 0), "atspi: signals need no answer"},
     Check{same(W.sig(var_inner(reply_arg(serve1(call(node_path(6), "org.freedesktop.DBus.Properties", "Get", W.seq([W.DStr{"org.a11y.atspi.Value"}, W.DStr{"CurrentValue"}])), with_slider(2.5))))), "d") && f64_is(var_inner(reply_arg(serve1(call(node_path(6), "org.freedesktop.DBus.Properties", "Get", W.seq([W.DStr{"org.a11y.atspi.Value"}, W.DStr{"MaximumValue"}])), with_slider(2.5)))), 1076101120, 0), "atspi: Value properties are doubles"},
+    Check{same(diffs(gen(40n, 0), gen(40n, 1)), "child-:1:38:40|child-:1:33:35|child-:1:28:30|child-:1:23:25|child-:1:18:20|child-:1:13:15|child-:1:8:10|child-:1:3:5|del:5|del:10|del:15|del:20|del:25|del:30|del:35|del:40|state:2:focused:False|name:3:n3!|bounds:4|name:6:n6!|bounds:8|name:9:n9!|name:12:n12!|bounds:12|bounds:16|name:18:n18!|name:21:n21!|name:24:n24!|bounds:24|name:27:n27!|bounds:28|bounds:32|name:33:n33!|name:36:n36!|bounds:36|name:39:n39!|add:300|add:301|add:302|child+:1:32:300|child+:1:33:301|child+:1:34:302|state:7:enabled:True|state:7:sensitive:True|state:7:focused:True|focus:7|state:14:enabled:True|state:14:sensitive:True|state:21:enabled:True|state:21:sensitive:True|state:28:enabled:True|state:28:sensitive:True"), "diff: 40 buttons, removed, renamed, moved and added, in announcement order"},
+    Check{same(diffs(M.Tree{Nil{}}, gen(40n, 1)), "add:0|add:1|add:2|add:3|add:4|add:6|add:7|add:8|add:9|add:11|add:12|add:13|add:14|add:16|add:17|add:18|add:19|add:21|add:22|add:23|add:24|add:26|add:27|add:28|add:29|add:31|add:32|add:33|add:34|add:36|add:37|add:38|add:39|add:41|add:300|add:301|add:302|state:1:active:True|window+:1|state:7:focused:True|focus:7") && same(diffs(gen(40n, 1), gen(40n, 0)), "child-:1:34:302|child-:1:33:301|child-:1:32:300|del:300|del:301|del:302|state:7:enabled:False|state:7:sensitive:False|state:7:focused:False|state:14:enabled:False|state:14:sensitive:False|state:21:enabled:False|state:21:sensitive:False|state:28:enabled:False|state:28:sensitive:False|name:3:n3|bounds:4|name:6:n6|bounds:8|name:9:n9|name:12:n12|bounds:12|bounds:16|name:18:n18|name:21:n21|name:24:n24|bounds:24|name:27:n27|bounds:28|bounds:32|name:33:n33|name:36:n36|bounds:36|name:39:n39|add:5|add:10|add:15|add:20|add:25|add:30|add:35|add:40|child+:1:3:5|child+:1:8:10|child+:1:13:15|child+:1:18:20|child+:1:23:25|child+:1:28:30|child+:1:33:35|child+:1:38:40|state:2:focused:True|focus:2"), "diff: generated trees, first publication and the way back"},
+    Check{same(checked(gen(40n, 1)), "ok") && same(checked(with_node(gen(40n, 1), gen.node(17, 1))), "auvia: duplicate node id 17") && same(checked(with_node(gen(40n, 1), M.plain(500, 1, M.Label{}, "x", M.zero_box(), Nil{}))), "auvia: node 500 is not listed by its parent"), "model: generated trees check, with a duplicate and an orphan"},
+    Check{same(reply_digest(serve1(call(O.cache_path(), "org.a11y.atspi.Cache", "GetItems", W.DEnd{}), gen(40n, 1))), "10688#1642861101") && same(reply_digest(serve1(call(node_path(300), acc(), "GetIndexInParent", W.DEnd{}), gen(40n, 1))), "52#3444926104"), "atspi: cache items and index in parent of a generated tree are pinned"},
+    Check{same(digest(encode_all(O.announce(ctx(), M.nodes(gen(40n, 1)), D.diff(M.Tree{Nil{}}, gen(40n, 1))))), "16204#3489676328"), "atspi: first publication signals of a generated tree are pinned"},
     Check{same(diffs(with_slider(2.5), with_slider(3.0)), "value:6") && same(checked(with_slider(1.0)), "ok"), "diff: value change is one event"},
     Check{same(member_of(signal_of(D.StateChanged{2, M.Focused{}, True{}})), "org.a11y.atspi.Event.Object.StateChanged@/org/a11y/atspi/accessible/2:siiva{sv}"), "atspi: state change signal"},
     Check{same(member_of(signal_of(D.WindowActivated{1})), "org.a11y.atspi.Event.Window.Activate@/org/a11y/atspi/accessible/1:siiva{sv}"), "atspi: window activate signal"},
