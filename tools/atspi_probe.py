@@ -12,13 +12,17 @@ state, name, children and text events, GrabFocus the button, invoke its
 action through AT-SPI (DoAction), and check the counter label changed
 exactly once. With --field, also read the text field's text, caret and
 extents through Text, edit it through EditableText (insert, delete, a
-refused "€"), move its caret and select. Exit status 0 only when every
-check passes.
+refused "☕"), move its caret and select (--field-seed first sets an empty
+field's text through SetTextContents). --label-prefix may list several
+prefixes separated by "|" (a status line whose wording changes); the
+counter is the label's first integer, 0 when it has none. Exit status 0
+only when every check passes.
 """
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -117,6 +121,14 @@ def probe_field(app, args, result, check, pump):
         return [e for e in result["events"][mark:] if e["type"].startswith(kind) and e["source"] == args.field]
 
     # A screen reader follows focus: the field takes it as Tab would.
+    if args.field_seed:
+        mark = len(result["events"])
+        ok = Atspi.EditableText.set_text_contents(field, args.field_seed)
+        pump(0.5)
+        check("SetTextContents through AT-SPI is performed, visible and announced",
+              ok and text_of(field) == args.field_seed and events(mark, "object:text-changed:insert"),
+              {"ok": ok, "text": text_of(field), "events": events(mark, "object:text-changed")})
+
     mark = len(result["events"])
     ok = field.grab_focus()
     pump(1.0)
@@ -166,10 +178,10 @@ def probe_field(app, args, result, check, pump):
 
     mark = len(result["events"])
     before = text_of(field)
-    ok = Atspi.EditableText.insert_text(field, 0, "\u20ac", 3)
+    ok = Atspi.EditableText.insert_text(field, 0, "\u2615", 3)
     after = text_of(field)
     pump(0.5)
-    check("a refused InsertText (U+20AC) reports failure and changes nothing",
+    check("a refused InsertText (U+2615, not in the font) reports failure and changes nothing",
           ok is False and after == before and not events(mark, "object:text-changed"),
           {"ok": ok, "before": before, "after": after})
 
@@ -201,9 +213,11 @@ def main():
     ap.add_argument("--x11-title", help="also drive the window with X11 input sent only to it")
     ap.add_argument("--outside", default="440,300", help="a window point outside every control")
     ap.add_argument("--field", help="name of an editable text field to read and edit through AT-SPI")
+    ap.add_argument("--field-seed", help="text to set (SetTextContents) before reading the field")
     args = ap.parse_args()
 
     result = {"checks": [], "events": []}
+    prefixes = tuple(args.label_prefix.split("|"))
 
     def check(name, ok, detail=None):
         result["checks"].append({"name": name, "ok": bool(ok), "detail": detail})
@@ -248,7 +262,7 @@ def main():
             frame = acc
         elif role == Atspi.Role.PUSH_BUTTON and acc.get_name() == args.button:
             button = acc
-        elif role == Atspi.Role.LABEL and (acc.get_name() or "").startswith(args.label_prefix):
+        elif role == Atspi.Role.LABEL and (acc.get_name() or "").startswith(prefixes):
             label = acc
     check("frame present", frame is not None, frame.get_name() if frame else None)
     check("button present with push-button role", button is not None, args.button)
@@ -293,7 +307,7 @@ def main():
         x11("key", "space")
         pump(1.0)
         named = [e for e in since(mark, "object:property-change:accessible-name")
-                 if (e["source"] or "").startswith(args.label_prefix)]
+                 if (e["source"] or "").startswith(prefixes)]
         check("keyboard Space activation changes the counter once and is announced once",
               len(named) == 1 and label.get_name() != before, {"before": before, "after": label.get_name(), "events": named})
         mark = len(result["events"])
@@ -323,13 +337,12 @@ def main():
     after = label.get_name()
     name_events = [e for e in result["events"][mark:]
                    if e["type"] == "object:property-change:accessible-name"
-                   and (e["source"] or "").startswith(args.label_prefix)]
+                   and (e["source"] or "").startswith(prefixes)]
     check("DoAction(0) accepted", done)
-    try:
-        n0 = int(before.split(":")[-1])
-        n1 = int(after.split(":")[-1])
-    except ValueError:
-        n0 = n1 = None
+    def count(name):
+        m = re.search(r"\d+", name or "")
+        return int(m.group()) if m else 0
+    n0, n1 = count(before), count(after)
     check("counter incremented exactly once through AT-SPI", n0 is not None and n1 == n0 + 1,
           {"before": before, "after": after})
     check("name change announced exactly once", len(name_events) == 1, name_events)
