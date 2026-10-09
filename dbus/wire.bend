@@ -1159,13 +1159,13 @@ def got.bad(g: Got) -> U32:
 # The bytes, what the previous frame decoded to, and whether the frame at
 # the current offset is complete (and its size).
 type Next is Type:
-  Ready{bytes: Array<U32>, prev: Got, need: U32}
+  Whole{bytes: Array<U32>, prev: Got, need: U32}
   Short{bytes: Array<U32>, prev: Got}
 
 def next.pick(ready: Bool, arr: Array<U32>, +need: U32, g: Got) -> Next:
   match ready:
     case True{}:
-      Ready{arr, g, need}
+      Whole{arr, g, need}
     case False{}:
       Short{arr, g}
 
@@ -1189,13 +1189,13 @@ def drain.stop(arr: Array<U32>, +from: U32, +n: U32, acc: List<&2, Message>, +ba
 # out, a complete frame at off is dropped, as the List version did.
 def drain.go(fuel: Nat, nx: Next, +off: U32, +n: U32, acc: List<&2, Message>, +bad: U32) -> Inbox:
   match fuel nx:
-    case 0n Ready{arr, +g, +need}:
+    case 0n Whole{arr, +g, +need}:
       drain.stop(arr, (off + need : U32), n, got.keep(g, acc), (bad + got.bad(g) : U32))
     case 0n Short{arr, +g}:
       drain.stop(arr, off, n, got.keep(g, acc), (bad + got.bad(g) : U32))
     case 1n+p Short{arr, +g}:
       drain.stop(arr, off, n, got.keep(g, acc), (bad + got.bad(g) : U32))
-    case 1n+p Ready{arr, +g, +need}:
+    case 1n+p Whole{arr, +g, +need}:
       +after = (off + need : U32)
       drain.go(p, next.decoded(decode.at(arr, off, need), after, n), after, n, got.keep(g, acc), (bad + got.bad(g) : U32))
 
