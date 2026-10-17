@@ -293,15 +293,15 @@ type Stop is Data:
 # selection anchor, in Unicode scalars (AT-SPI's character offsets); and
 # where it is drawn: one line from (origin_x, origin_y), line_height tall,
 # each stop at origin_x + x, in window coordinates.
-type Text is Data:
-  Text{content: String, count: U32, caret: U32, anchor: U32,
+type NodeText is Data:
+  NodeText{content: String, count: U32, caret: U32, anchor: U32,
     origin_x: F32, origin_y: F32, line_height: F32, stops: List<&2, Stop>}
 
 type Node is Data:
   Node{id: U32, parent: U32, role: Role, name: String, description: String,
     states: List<&2, State>, actions: List<&2, Action>,
     relations: List<&2, Relation>, attributes: List<&2, Attr>, bounds: Box,
-    value: Maybe<&2, Range>, text: Maybe<&2, Text>, children: List<&2, U32>}
+    value: Maybe<&2, Range>, text: Maybe<&2, NodeText>, children: List<&2, U32>}
 
 type Tree is Data:
   Tree{nodes: List<&2, Node>}
@@ -370,7 +370,7 @@ def node_bounds(n: Node) -> Box:
   Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   b
 
-def node_text(n: Node) -> Maybe<&2, Text>:
+def node_text(n: Node) -> Maybe<&2, NodeText>:
   Node{id, p, r, nm, d, s, a, rl, at, b, v, tx, c} = n
   tx
 

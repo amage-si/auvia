@@ -117,7 +117,7 @@ def has_actions(xs: List<&2, M.Action>) -> Bool:
     case _:
       True{}
 
-def has_text(m: Maybe<&2, M.Text>) -> Bool:
+def has_text(m: Maybe<&2, M.NodeText>) -> Bool:
   match m:
     case None{}:
       False{}

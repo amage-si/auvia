@@ -121,9 +121,9 @@ def text_edit(+id: U32, c: T.Change) -> List<&2, Change>:
   T.Change{+at, gone, +gone_n, came, +came_n} = c
   cat(when(U32.is_ne(gone_n, 0), TextRemoved{id, at, gone_n, gone}), when(U32.is_ne(came_n, 0), TextInserted{id, at, came_n, came}))
 
-def text_moves(+id: U32, +a: M.Text, +b: M.Text) -> List<&2, Change>:
-  M.Text{c0, n0, +k0, +a0, ox0, oy0, lh0, st0} = a
-  M.Text{c1, n1, +k1, +a1, ox1, oy1, lh1, st1} = b
+def text_moves(+id: U32, +a: M.NodeText, +b: M.NodeText) -> List<&2, Change>:
+  M.NodeText{c0, n0, +k0, +a0, ox0, oy0, lh0, st0} = a
+  M.NodeText{c1, n1, +k1, +a1, ox1, oy1, lh1, st1} = b
   +lo0 = U32.min(k0, a0)
   +hi0 = U32.max(k0, a0)
   +lo1 = U32.min(k1, a1)
@@ -132,15 +132,15 @@ def text_moves(+id: U32, +a: M.Text, +b: M.Text) -> List<&2, Change>:
   cat(when(U32.is_ne(k0, k1), CaretMoved{id, k1}),
     when(Bool.not(empty) && (U32.is_ne(lo0, lo1) || U32.is_ne(hi0, hi1)), SelectionChanged{id}))
 
-def text_pair(+id: U32, a: M.Text, b: M.Text) -> List<&2, Change>:
-  M.Text{+c0, +n0, k0, a0, ox0, oy0, lh0, st0} = a
-  M.Text{+c1, +n1, k1, a1, ox1, oy1, lh1, st1} = b
+def text_pair(+id: U32, a: M.NodeText, b: M.NodeText) -> List<&2, Change>:
+  M.NodeText{+c0, +n0, k0, a0, ox0, oy0, lh0, st0} = a
+  M.NodeText{+c1, +n1, k1, a1, ox1, oy1, lh1, st1} = b
   +edits = Bool.pick(List<&2, Change>, String.eq(c0, c1), Nil{}, text_edit(id, T.change(c0, c1, n0, n1)))
-  cat(edits, text_moves(id, M.Text{c0, n0, k0, a0, ox0, oy0, lh0, st0}, M.Text{c1, n1, k1, a1, ox1, oy1, lh1, st1}))
+  cat(edits, text_moves(id, M.NodeText{c0, n0, k0, a0, ox0, oy0, lh0, st0}, M.NodeText{c1, n1, k1, a1, ox1, oy1, lh1, st1}))
 
 # Only a text that stays a text is diffed; one that appears or goes is
 # read afresh by clients.
-def text_events(+id: U32, old: Maybe<&2, M.Text>, now: Maybe<&2, M.Text>) -> List<&2, Change>:
+def text_events(+id: U32, old: Maybe<&2, M.NodeText>, now: Maybe<&2, M.NodeText>) -> List<&2, Change>:
   match old now:
     case Some{a} Some{b}:
       text_pair(id, a, b)

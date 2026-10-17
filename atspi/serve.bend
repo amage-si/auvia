@@ -292,17 +292,17 @@ def range_props(m: Maybe<&2, M.Range>) -> List<&2, Prop>:
         Prop{O.i_value(), "MinimumIncrement", W.f64(st)}, Prop{O.i_value(), "CurrentValue", W.f64(c)},
         Prop{O.i_value(), "Text", W.DStr{""}}]
 
-def text_props(m: Maybe<&2, M.Text>) -> List<&2, Prop>:
+def text_props(m: Maybe<&2, M.NodeText>) -> List<&2, Prop>:
   match m:
     case None{}:
       Nil{}
-    case Some{M.Text{c, n, ca, an, ox, oy, lh, st}}:
+    case Some{M.NodeText{c, n, ca, an, ox, oy, lh, st}}:
       [Prop{O.i_text(), "CharacterCount", W.DI32{n}}, Prop{O.i_text(), "CaretOffset", W.DI32{ca}}]
 
 def app_props(+ctx: O.Ctx, root: Bool) -> List<&2, List<&2, Prop>>:
   O.Ctx{bus, id, l, x, y} = ctx
   O.when(List<&2, Prop>, root, [Prop{O.i_application(), "ToolkitName", W.DStr{"Auvia"}},
-    Prop{O.i_application(), "Version", W.DStr{"0.1.1"}},
+    Prop{O.i_application(), "Version", W.DStr{"0.2.0"}},
     Prop{O.i_application(), "AtspiVersion", W.DStr{"2.1"}},
     Prop{O.i_application(), "Id", W.DI32{id}}])
 
@@ -420,14 +420,14 @@ def layer(r: M.Role) -> U32:
 # Text
 # ----
 
-def the_text(m: Maybe<&2, M.Text>) -> M.Text:
+def the_text(m: Maybe<&2, M.NodeText>) -> M.NodeText:
   match m:
     case None{}:
-      M.Text{"", 0, 0, 0, 0.0, 0.0, 0.0, Nil{}}
+      M.NodeText{"", 0, 0, 0, 0.0, 0.0, 0.0, Nil{}}
     case Some{t}:
       t
 
-def text_of(n: M.Node) -> M.Text:
+def text_of(n: M.Node) -> M.NodeText:
   the_text(M.node_text(n))
 
 def count_of(n: M.Node) -> U32:
@@ -436,8 +436,8 @@ def count_of(n: M.Node) -> U32:
 def int_arg(+body: W.Value, k: Nat) -> U32:
   W.word(W.arg(body, k))
 
-def get_text(t: M.Text, +a: U32, +b: U32) -> Reply:
-  M.Text{c, +n, ca, an, ox, oy, lh, st} = t
+def get_text(t: M.NodeText, +a: U32, +b: U32) -> Reply:
+  M.NodeText{c, +n, ca, an, ox, oy, lh, st} = t
   one(W.DStr{T.slice(c, T.clamp_start(a, n), T.clamp_end(b, n))})
 
 def piece_reply(p: T.Piece) -> Reply:
@@ -452,7 +452,7 @@ def four(b: M.Box) -> Reply:
 def text_extents(+ctx: O.Ctx, +ix: M.Index, +n: M.Node, coord: U32, b: M.Box) -> Reply:
   four(O.moved(b, O.offset(ctx, coord, O.parent_box(ix, n))))
 
-def point_offset(t: M.Text, pt: O.Offset) -> Reply:
+def point_offset(t: M.NodeText, pt: O.Offset) -> Reply:
   O.Offset{+x, +y} = pt
   one(W.DI32{T.offset_at(t, x, y)})
 
@@ -461,7 +461,7 @@ def pair_reply(p: U32 & U32, +ok: Bool) -> Reply:
   Ok{W.seq([W.DI32{Bool.pick(U32, ok, a, 0)}, W.DI32{Bool.pick(U32, ok, b, 0)}])}
 
 # The single selection, or (0, 0) when there is none or the number is not 0.
-def selection_reply(+t: M.Text, +k: U32) -> Reply:
+def selection_reply(+t: M.NodeText, +k: U32) -> Reply:
   pair_reply(T.selection(t), U32.is_eq(k, 0) && T.has_selection(t))
 
 def attribute_run(+n: U32) -> Reply:
@@ -511,7 +511,7 @@ def select_op(+n: M.Node, +a: U32, +b: U32) -> M.TextOp:
   +c = count_of(n)
   M.Select{T.clamp_start(a, c), T.clamp_end(b, c)}
 
-def collapse_op(t: M.Text) -> M.TextOp:
+def collapse_op(t: M.NodeText) -> M.TextOp:
   +c = T.text_caret(t)
   M.Select{c, c}
 

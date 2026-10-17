@@ -672,28 +672,28 @@ def tstops.go(n: Nat, +i: U32) -> List<&2, M.Stop>:
 def tstops(n: Nat) -> List<&2, M.Stop>:
   tstops.go(n, 0)
 
-def ttext(content: String, +caret: U32, +anchor: U32, stops: List<&2, M.Stop>) -> M.Text:
+def ttext(content: String, +caret: U32, +anchor: U32, stops: List<&2, M.Stop>) -> M.NodeText:
   T.text(content, caret, anchor, 30.0, 160.0, 20.0, stops)
 
 # "olá mundo": 9 scalars, one stop each; the line at (30, 160), 20 tall.
-def ola(+caret: U32, +anchor: U32) -> M.Text:
+def ola(+caret: U32, +anchor: U32) -> M.NodeText:
   ttext("olá mundo", caret, anchor, tstops(9n))
 
 # "café" with a combining acute: 5 scalars, 4 clusters (no stop at 4).
 def cafe_text() -> String:
   "cafe" ++ SCon{Chr{769}, SNil{}}
 
-def cafe() -> M.Text:
+def cafe() -> M.NodeText:
   ttext(cafe_text(), 0, 0, [M.Stop{0, 0.0}, M.Stop{1, 10.0}, M.Stop{2, 20.0}, M.Stop{3, 30.0}, M.Stop{5, 40.0}])
 
 def entry_states(+enabled: Bool) -> List<&2, M.State>:
   Bool.pick(List<&2, M.State>, enabled, [M.Enabled{}, M.Sensitive{}, M.Visible{}, M.Showing{}, M.Focusable{}, M.Editable{}, M.SingleLine{}],
     [M.Visible{}, M.Showing{}, M.Focusable{}, M.Editable{}, M.SingleLine{}])
 
-def entry(t: M.Text, +enabled: Bool) -> M.Node:
+def entry(t: M.NodeText, +enabled: Bool) -> M.Node:
   M.Node{7, 1, M.Entry{}, "Nome", "", entry_states(enabled), Nil{}, Nil{}, Nil{}, M.Box{20.0, 150.0, 260.0, 40.0}, None{}, Some{t}, Nil{}}
 
-def with_entry(t: M.Text, +enabled: Bool) -> M.Tree:
+def with_entry(t: M.NodeText, +enabled: Bool) -> M.Tree:
   M.Tree{[M.application("app", [1]), frame([7]), entry(t, enabled)]}
 
 # A label with a text but no Editable state: Text without EditableText.
@@ -730,7 +730,7 @@ def verdict_of(hs: List<&2, S.Held>, ok: Bool) -> String:
 def answer_of(s: S.Served, ok: Bool) -> String:
   verdict_of(held_of(s), ok)
 
-def entry_diff(a: M.Text, b: M.Text) -> String:
+def entry_diff(a: M.NodeText, b: M.NodeText) -> String:
   diffs(with_entry(a, True{}), with_entry(b, True{}))
 
 def golden_insert_call() -> List<&2, U32>:
@@ -764,7 +764,7 @@ def reply_bytes(s: S.Served) -> List<&2, U32>:
 def signal_bytes(c: D.Change) -> List<&2, U32>:
   body_bytes(body_of(signal_of(c)))
 
-def fbuilt(s: KT.State, t: M.Text) -> M.Tree:
+def fbuilt(s: KT.State, t: M.NodeText) -> M.Tree:
   AK.build.with("app", AK.Surface{100, "Janela", 480.0, 320.0, True{}}, semantics(s), notes(), [AK.Content{7, t, "Seu nome"}])
 
 def attrs_text(xs: List<&2, M.Attr>) -> String:

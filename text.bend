@@ -29,31 +29,31 @@ def clamp_start(+v: U32, +n: U32) -> U32:
 def slice(s: String, +lo: U32, +hi: U32) -> String:
   String.take(String.drop(s, U32.to_nat(lo)), U32.to_nat((U32.max(lo, hi) - lo : U32)))
 
-def text_count(t: M.Text) -> U32:
-  M.Text{c, n, ca, an, ox, oy, lh, st} = t
+def text_count(t: M.NodeText) -> U32:
+  M.NodeText{c, n, ca, an, ox, oy, lh, st} = t
   n
 
-def text_caret(t: M.Text) -> U32:
-  M.Text{c, n, ca, an, ox, oy, lh, st} = t
+def text_caret(t: M.NodeText) -> U32:
+  M.NodeText{c, n, ca, an, ox, oy, lh, st} = t
   ca
 
-def content(t: M.Text) -> String:
-  M.Text{c, n, ca, an, ox, oy, lh, st} = t
+def content(t: M.NodeText) -> String:
+  M.NodeText{c, n, ca, an, ox, oy, lh, st} = t
   c
 
 # The text record of a content with its caret, anchor and geometry; the
 # count is the content's length in scalars.
-def text(content: String, +caret: U32, +anchor: U32, origin_x: F32, origin_y: F32, line_height: F32, stops: List<&2, M.Stop>) -> M.Text:
+def text(content: String, +caret: U32, +anchor: U32, origin_x: F32, origin_y: F32, line_height: F32, stops: List<&2, M.Stop>) -> M.NodeText:
   +c = content
-  M.Text{c, U32.from_nat(String.length(c)), caret, anchor, origin_x, origin_y, line_height, stops}
+  M.NodeText{c, U32.from_nat(String.length(c)), caret, anchor, origin_x, origin_y, line_height, stops}
 
 # The selection as [start, end), in order.
-def selection(t: M.Text) -> U32 & U32:
-  M.Text{c, n, +ca, +an, ox, oy, lh, st} = t
+def selection(t: M.NodeText) -> U32 & U32:
+  M.NodeText{c, n, +ca, +an, ox, oy, lh, st} = t
   (U32.min(ca, an), U32.max(ca, an))
 
-def has_selection(t: M.Text) -> Bool:
-  M.Text{c, n, +ca, +an, ox, oy, lh, st} = t
+def has_selection(t: M.NodeText) -> Bool:
+  M.NodeText{c, n, +ca, +an, ox, oy, lh, st} = t
   U32.is_ne(ca, an)
 
 # Clusters
@@ -145,15 +145,15 @@ def inside_piece(inside: Bool, +s: String, +n: U32, +i: U32, +granularity: U32, 
     case True{}:
       Bool.pick(Piece, U32.is_eq(granularity, 0), char_piece(s, span(stops, i)), word_piece(s, i))
 
-def whole(t: M.Text) -> Piece:
-  M.Text{c, +n, ca, an, ox, oy, lh, st} = t
+def whole(t: M.NodeText) -> Piece:
+  M.NodeText{c, +n, ca, an, ox, oy, lh, st} = t
   Piece{c, 0, n}
 
-def small_piece(t: M.Text, +i: U32, +granularity: U32) -> Piece:
-  M.Text{+c, +n, ca, an, ox, oy, lh, st} = t
+def small_piece(t: M.NodeText, +i: U32, +granularity: U32) -> Piece:
+  M.NodeText{+c, +n, ca, an, ox, oy, lh, st} = t
   inside_piece(U32.is_lt(i, n), c, n, i, granularity, st)
 
-def piece_at(small: Bool, t: M.Text, +i: U32, +granularity: U32) -> Piece:
+def piece_at(small: Bool, t: M.NodeText, +i: U32, +granularity: U32) -> Piece:
   match small:
     case False{}:
       whole(t)
@@ -164,7 +164,7 @@ def piece_at(small: Bool, t: M.Text, +i: U32, +granularity: U32) -> Piece:
 # base and its combining mark), 1 the word; sentence (2), line (3) and
 # paragraph (4) are the whole text, which is one line. Past the end the
 # character and the word are empty, at the end.
-def string_at(+t: M.Text, +i: U32, +granularity: U32) -> Piece:
+def string_at(+t: M.NodeText, +i: U32, +granularity: U32) -> Piece:
   piece_at(U32.is_lt(granularity, 2), t, i, granularity)
 
 # GetTextAtOffset's boundary types: 0 character, 1-2 word start/end, 3-4
@@ -180,8 +180,8 @@ def scalar.of(m: Maybe<&2, Char>) -> U32:
       c
 
 # The scalar at offset i, or 0 outside the text.
-def scalar_at(+t: M.Text, +i: U32) -> U32:
-  M.Text{+c, +n, ca, an, ox, oy, lh, st} = t
+def scalar_at(+t: M.NodeText, +i: U32) -> U32:
+  M.NodeText{+c, +n, ca, an, ox, oy, lh, st} = t
   Bool.pick(U32, U32.is_lt(i, n), scalar.of(String.get(c, U32.to_nat(i))), 0)
 
 # Geometry
@@ -194,13 +194,13 @@ def span_box(sp: Span, +ox: F32, +oy: F32, +lh: F32) -> M.Box:
   Span{s, e, +x0, +x1} = sp
   M.Box{(ox + x0 : F32), oy, (x1 - x0 : F32), lh}
 
-def char_box(+t: M.Text, +i: U32) -> M.Box:
-  M.Text{c, n, ca, an, +ox, +oy, +lh, st} = t
+def char_box(+t: M.NodeText, +i: U32) -> M.Box:
+  M.NodeText{c, n, ca, an, +ox, +oy, +lh, st} = t
   span_box(span(st, i), ox, oy, lh)
 
 # The box of the characters [lo, hi), in either order.
-def range_box(+t: M.Text, +a: U32, +b: U32) -> M.Box:
-  M.Text{c, n, ca, an, +ox, +oy, +lh, +st} = t
+def range_box(+t: M.NodeText, +a: U32, +b: U32) -> M.Box:
+  M.NodeText{c, n, ca, an, +ox, +oy, +lh, +st} = t
   +x0 = x_at(st, U32.min(a, b))
   +x1 = x_at(st, U32.max(a, b))
   M.Box{(ox + x0 : F32), oy, (x1 - x0 : F32), lh}
@@ -216,8 +216,8 @@ def nearest(stops: List<&2, M.Stop>, +px: F32, +best: U32, +gap: F32) -> U32:
 
 # The offset of the caret stop nearest the window point (ties go left), or
 # -1 when the point is outside the text's line or beyond its ends.
-def offset_at(+t: M.Text, +px: F32, +py: F32) -> U32:
-  M.Text{c, n, ca, an, +ox, +oy, +lh, +st} = t
+def offset_at(+t: M.NodeText, +px: F32, +py: F32) -> U32:
+  M.NodeText{c, n, ca, an, +ox, +oy, +lh, +st} = t
   +x = (px - ox : F32)
   +inside = (py >= oy : F32) && (py < oy + lh : F32) && (x >= 0.0 : F32) && (x <= x_at(st, n) : F32)
   Bool.pick(U32, inside, nearest(st, x, 0, 1000000000.0), 4294967295)

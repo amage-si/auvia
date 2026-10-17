@@ -7,6 +7,19 @@ patch version (0.1.1) only fixes. Auvia is built from source together with its
 sibling AMAGE libraries; the set of versions tested together is listed in
 [eco-build's releases](https://github.com/amage-si/eco-build/tree/main/releases).
 
+## [0.2.0] - 2026-10-17
+
+### Changed
+
+- **Breaking:** a node's text record is `NodeText` (type and constructor),
+  no longer `Text`. Base's `Event` gains a `Text` constructor in the next
+  Bend release (upstream #1441), and a second `Text` would stop every
+  program that imports Auvia with "duplicate declaration of Text". The
+  fields and every behaviour are unchanged. Callers rename `M.Text` and
+  `Text{...}` to `M.NodeText` and `NodeText{...}`. Checked on Bend 2.0.37
+  (121 checks, the examples build) and against upstream main (the eco demo,
+  the tests and the headless example emit C).
+
 ## [0.1.1] - 2026-10-09
 
 ### Changed
@@ -46,5 +59,6 @@ of AMAGE Eco 0.1.0.
 - 121 native checks; the libatspi probe passes against the demo and the
   headless example.
 
+[0.2.0]: https://github.com/amage-si/auvia/releases/tag/v0.2.0
 [0.1.1]: https://github.com/amage-si/auvia/releases/tag/v0.1.1
 [0.1.0]: https://github.com/amage-si/auvia/releases/tag/v0.1.0

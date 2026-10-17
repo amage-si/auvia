@@ -44,7 +44,7 @@ def is_edit(r: KT.Role) -> Bool:
 # `placeholder-text` attribute). field.bend makes one from Mokko's
 # EditState.
 type Content is Data:
-  Content{id: U32, text: M.Text, placeholder: String}
+  Content{id: U32, text: M.NodeText, placeholder: String}
 
 def content_for(cs: List<&2, Content>, +id: U32) -> Maybe<&2, Content>:
   match cs:
@@ -53,7 +53,7 @@ def content_for(cs: List<&2, Content>, +id: U32) -> Maybe<&2, Content>:
     case Con{Content{+cid, t, ph}, rest}:
       Bool.pick(Maybe<&2, Content>, U32.is_eq(cid, id), Some{Content{cid, t, ph}}, content_for(rest, id))
 
-def text_in(m: Maybe<&2, Content>) -> Maybe<&2, M.Text>:
+def text_in(m: Maybe<&2, Content>) -> Maybe<&2, M.NodeText>:
   match m:
     case None{}:
       None{}

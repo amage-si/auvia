@@ -25,12 +25,12 @@ Everything here is reusable data.
 Node{id: U32, parent: U32, role: Role, name: String, description: String,
   states: List<&2, State>, actions: List<&2, Action>,
   relations: List<&2, Relation>, attributes: List<&2, Attr>, bounds: Box,
-  value: Maybe<&2, Range>, text: Maybe<&2, Text>, children: List<&2, U32>}
+  value: Maybe<&2, Range>, text: Maybe<&2, NodeText>, children: List<&2, U32>}
 Tree{nodes: List<&2, Node>}
 Action{name, description, key}         Relation{kind: RelationKind, targets: List<&2, U32>}
 Attr{key, value}                       Box{x, y, width, height}    (F32)
 Range{current, min, max, step}         (F32)
-Text{content: String, count, caret, anchor: U32, origin_x, origin_y, line_height: F32,
+NodeText{content: String, count, caret, anchor: U32, origin_x, origin_y, line_height: F32,
   stops: List<&2, Stop>}               Stop{index: U32, x: F32}
 Request: Activate{id, index} | Focus{id} | EditText{id, op: TextOp, ticket}
 TextOp: SetCaret{offset} | Select{start, end} | SetContents{text} | Insert{offset, text}
@@ -82,7 +82,7 @@ index the tree themselves; the service keeps its published tree indexed.
 
 ## Text (`text.bend`)
 
-Pure queries over a `Text`: `slice(s, lo, hi)`, `span(stops, i)` (the
+Pure queries over a `NodeText`: `slice(s, lo, hi)`, `span(stops, i)` (the
 cluster holding offset i), `string_at(t, i, granularity)` (0 character, 1
 word from its start to the next word's start, 2-4 the whole line; past the
 end, an empty character or word), `boundary_granularity` (GetTextAtOffset's
@@ -137,7 +137,7 @@ re-read on demand).
 Surface{id: U32, title: String, width: F32, height: F32, active: Bool}
 Note{id: U32, description: String, relations: List<&2, M.Relation>,
   attributes: List<&2, M.Attr>, key: String}
-Content{id: U32, text: M.Text, placeholder: String}
+Content{id: U32, text: M.NodeText, placeholder: String}
 build(app: String, surface: Surface, semantics: List<&2, Mk.Semantic>, notes: List<&2, Note>) -> M.Tree
 build.with(app, surface, semantics, notes, contents: List<&2, Content>) -> M.Tree
 route(state: KT.State, request: M.Request) -> Routed{change: KT.Change, accepted: Bool}
